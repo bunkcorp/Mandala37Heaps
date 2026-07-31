@@ -55,6 +55,8 @@ enum MandalaBuilder {
             root.addChild(marker)
         }
 
+        // Static floor so physical grain clusters rest on the plate top.
+        GrainPhysics.attachPlateCollider(to: root, radius: radius, topY: 0.041)
         return root
     }
 
@@ -131,14 +133,18 @@ enum MandalaBuilder {
         bulk.position.y = maximumHeight * initialProgress * 0.5
         root.addChild(bulk)
 
-        let surfaceGrains = makeTierSurfaceGrains(
-            radius: radius,
-            maximumHeight: maximumHeight
-        )
+        // Soft bulges only — loose surface detail comes from physical grain clusters.
+        let surfaceGrains = makeTierSurfaceBulges(radius: radius)
         surfaceGrains.name = "SurfaceGrains"
         surfaceGrains.position.y = maximumHeight * initialProgress
         surfaceGrains.isEnabled = false
         root.addChild(surfaceGrains)
+
+        let surfaceCollider = GrainPhysics.makeGrainSurfaceCollider(
+            radius: radius,
+            atY: maximumHeight * initialProgress
+        )
+        root.addChild(surfaceCollider)
 
         root.components.set(
             GrainFillComponent(maximumHeight: maximumHeight, progress: initialProgress)
@@ -146,13 +152,9 @@ enum MandalaBuilder {
         return root
     }
 
-    /// Uneven packed surface: overlapping bulges + scattered rice grains.
-    private static func makeTierSurfaceGrains(
-        radius: Float,
-        maximumHeight: Float
-    ) -> Entity {
+    /// Uneven packed surface bulges (physical clusters provide the granular edge).
+    private static func makeTierSurfaceBulges(radius: Float) -> Entity {
         let root = Entity()
-        _ = maximumHeight
 
         let bulges: [(SIMD2<Float>, Float, Float)] = [
             (SIMD2(0.00, 0.00), 0.72, 0.020),
@@ -178,51 +180,7 @@ enum MandalaBuilder {
             root.addChild(mound)
         }
 
-        let grainCount = max(40, min(120, Int(radius * 220)))
-        for index in 0..<grainCount {
-            let point = deterministicDiskPoint(
-                index: index,
-                count: grainCount,
-                radius: radius * 0.92
-            )
-            let grain = ModelEntity(
-                mesh: riceGrainMesh,
-                materials: [riceMaterials[index % riceMaterials.count]]
-            )
-            let grainLength: Float = 0.010
-            let grainWidth: Float = 0.003
-            grain.scale = SIMD3(grainWidth, grainLength, grainWidth)
-
-            let heightNoise =
-                0.0015 * sin(Float(index) * 2.17) +
-                0.0010 * cos(Float(index) * 1.41)
-            grain.position = SIMD3(point.x, heightNoise + 0.004, point.y)
-            grain.orientation = simd_quatf(
-                angle: Float(index) * 1.73,
-                axis: simd_normalize(
-                    SIMD3(
-                        0.25 + abs(sin(Float(index))),
-                        1,
-                        0.25 + abs(cos(Float(index)))
-                    )
-                )
-            )
-            root.addChild(grain)
-        }
-
         return root
-    }
-
-    private static func deterministicDiskPoint(
-        index: Int,
-        count: Int,
-        radius: Float
-    ) -> SIMD2<Float> {
-        let goldenAngle: Float = 2.39996323
-        let fraction = (Float(index) + 0.5) / Float(max(count, 1))
-        let r = sqrt(fraction) * radius
-        let angle = Float(index) * goldenAngle
-        return SIMD2(cos(angle) * r, sin(angle) * r)
     }
 
     /// Raise / lower the grain bulk and keep slot markers on the rising surface.
@@ -281,6 +239,12 @@ enum MandalaBuilder {
                 surface.transform = surfaceTransform
             }
         }
+
+        GrainPhysics.updateGrainSurfaceCollider(
+            in: fillRoot,
+            maximumHeight: maximumHeight,
+            progress: progress
+        )
 
         updateTierSlotHeight(
             tierEntity: tierEntity,
@@ -360,6 +324,13 @@ enum MandalaBuilder {
         }
 
         decorateRingWall(root: root, radius: radius, height: height, thickness: thickness)
+        GrainPhysics.attachRingPhysics(
+            to: root,
+            radius: radius,
+            height: height,
+            thickness: thickness,
+            mode: .static
+        )
         return root
     }
 
@@ -911,8 +882,6 @@ enum MandalaBuilder {
 
     // Shared mesh for bulk dome under grain / crystal mounds.
     private static let particleMesh = MeshResource.generateSphere(radius: 1)
-    /// Unit-height rice capsule (Y-up); scaled per grain on tier surfaces / mounds.
-    private static let riceGrainMesh = MeshResource.generateCylinder(height: 1, radius: 0.28)
 
     /// White / cream matte rice — matches traditional offering photo (not yellow grain).
     private static let riceMaterials: [SimpleMaterial] = {

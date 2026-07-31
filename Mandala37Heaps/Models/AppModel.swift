@@ -1,5 +1,6 @@
 import Foundation
 import Observation
+import QuartzCore
 import RealityKit
 import UIKit
 
@@ -43,6 +44,9 @@ final class AppModel {
     private var pulseTask: Task<Void, Never>?
     private var highlightPulseTask: Task<Void, Never>?
     private var autoPlayTask: Task<Void, Never>?
+    private var grainSimTask: Task<Void, Never>?
+    private var grainSims: [MandalaTier: GrainGPUSimulator] = [:]
+    let ritualTool = RitualToolTracker()
 
     var nextGuidedIndex: Int? {
         filled.firstIndex(of: false)
@@ -67,6 +71,55 @@ final class AppModel {
         refreshHighlights()
         rebuildPalette()
         updateStatus()
+        GrainAudio.shared.prepare()
+        ritualTool.attach(to: mandalaRoot)
+        ritualTool.startHandTracking()
+        startGrainSimulationLoop()
+    }
+
+    /// Per-frame Metal grain integrate / deposit / height-field relax.
+    func startGrainSimulationLoop() {
+        grainSimTask?.cancel()
+        grainSimTask = Task { @MainActor in
+            var last = CACurrentMediaTime()
+            while !Task.isCancelled {
+                let now = CACurrentMediaTime()
+                let dt = Float(now - last)
+                last = now
+                let step = min(max(dt, 1 / 240), 1 / 30)
+                for tier in MandalaTier.allCases {
+                    guard tier.rawValue <= unlockedTier.rawValue else { continue }
+                    if let tierRoot = tierRoots[tier],
+                       let toolLocal = ritualTool.toolPosition(in: tierRoot) {
+                        grainSims[tier]?.disturbWithTool(at: toolLocal)
+                    }
+                    grainSims[tier]?.step(dt: step)
+                }
+                try? await Task.sleep(for: .milliseconds(16))
+            }
+        }
+    }
+
+    func stopGrainSimulationLoop() {
+        grainSimTask?.cancel()
+        grainSimTask = nil
+        ritualTool.stop()
+    }
+
+    func dragRitualTool(translation: SIMD3<Float>) {
+        let base = ritualTool.localPositionInMandala ?? ritualTool.toolEntity.position
+        ritualTool.updateDraggedPosition(base + translation)
+    }
+
+    func isRitualTool(_ entity: Entity) -> Bool {
+        var node: Entity? = entity
+        while let current = node {
+            if current === ritualTool.toolEntity || current.name == "RitualScoop" {
+                return true
+            }
+            node = current.parent
+        }
+        return false
     }
 
     func enterMandala() {
@@ -108,9 +161,9 @@ final class AppModel {
 
                 placeHeapForAutoPlay(at: index)
 
-                // Allow heap settle + grain rise; longer pause when a new ring descends.
+                // Physics fall + bulk rise; longer pause when a new ring descends.
                 let tierBoundary = index == 16 || index == 24 || index == 32
-                try? await Task.sleep(for: .milliseconds(tierBoundary ? 1400 : 700))
+                try? await Task.sleep(for: .milliseconds(tierBoundary ? 2200 : 1600))
             }
         }
     }
@@ -259,30 +312,38 @@ final class AppModel {
         let tier = definition.tier
         let completedOnTier = tier.heapNumbers.filter { filled[$0 - 1] }.count
         let totalOnTier = tier.heapNumbers.count
+        let slotXZ = SIMD2(definition.localPosition.x, definition.localPosition.z)
 
-        // Keep heap visible briefly, then merge into the common fill and raise the grain.
+        // GPU pour → height-field settle; light rigid clusters for near-field contact spice.
         Task { @MainActor in
-            try? await Task.sleep(for: .milliseconds(280))
-            guard heapEntities[index] === heap else { return }
+            try? await Task.sleep(for: .milliseconds(180))
+            guard heapEntities[index] === heap,
+                  let tierEntity = tierRoots[tier] else { return }
+
+            let progress = grainFillProgress(completed: completedOnTier, total: totalOnTier)
+            grainSims[tier]?.pour(at: slotXZ, ritualProgress: progress)
+
+            // A few RealityKit clusters still collide with kinematic rings.
+            GrainPhysics.emitClusters(
+                into: tierEntity,
+                tier: tier,
+                at: slotXZ,
+                count: 10
+            )
+
+            try? await Task.sleep(for: .milliseconds(900))
+            GrainPhysics.freezeSettledGrains(in: tierEntity)
+            grainSims[tier]?.setRitualFillFloor(progress)
 
             if definition.number == 1 {
-                // Mount Meru stays proud; only the shared grain rises under it.
-                if let tierEntity = tierRoots[tier] {
-                    MandalaBuilder.setTierFillProgress(
-                        tierEntity: tierEntity,
-                        progress: grainFillProgress(completed: completedOnTier, total: totalOnTier)
-                    )
-                }
+                MandalaBuilder.setTierFillProgress(tierEntity: tierEntity, progress: progress)
             } else {
-                settleOfferingHeap(
-                    heap,
-                    into: tier,
-                    completed: completedOnTier,
-                    total: totalOnTier
-                )
+                settleOfferingHeap(heap, into: tier, completed: completedOnTier, total: totalOnTier)
             }
 
-            try? await Task.sleep(for: .milliseconds(480))
+            try? await Task.sleep(for: .milliseconds(350))
+            GrainPhysics.absorbBuriedAndExcess(in: tierEntity, fillProgress: progress)
+
             maybeUnlockNextTier()
 
             if filledCount >= 37 {
@@ -352,15 +413,23 @@ final class AppModel {
     private func applyTierUnlocked(_ tier: MandalaTier, unlocked: Bool, animate: Bool) {
         guard let root = tierRoots[tier] else { return }
         let rest = Transform(translation: SIMD3(0, tier.surfaceY, 0))
+        let metalRing = root.findEntity(named: "MetalRing")
 
         if unlocked {
             if animate {
                 if let lower = MandalaTier(rawValue: tier.rawValue - 1),
                    let lowerRoot = tierRoots[lower] {
                     MandalaBuilder.compressGrainUnderRing(lowerTier: lowerRoot)
+                    grainSims[lower]?.compressUnderRing()
+                    grainSims[lower]?.setRitualFillFloor(1.0)
+                    GrainPhysics.freezeSettledGrains(in: lowerRoot)
                 }
 
-                // Descend into the packed grain of the ring below (not a tiny pop-in).
+                // Kinematic ring: collides with loose surface grains while we prescribe the drop.
+                if let metalRing {
+                    GrainPhysics.setRingPhysicsMode(metalRing, mode: .kinematic)
+                }
+
                 var starting = rest
                 starting.translation.y += 0.09
                 starting.scale = SIMD3(repeating: 1.015)
@@ -377,10 +446,21 @@ final class AppModel {
                     guard tierRoots[tier] === root else { return }
                     root.transform = rest
                     root.isEnabled = true
+                    if let metalRing {
+                        GrainPhysics.setRingPhysicsMode(metalRing, mode: .static)
+                    }
+                    if let lower = MandalaTier(rawValue: tier.rawValue - 1),
+                       let lowerRoot = tierRoots[lower] {
+                        GrainPhysics.freezeSettledGrains(in: lowerRoot)
+                        GrainPhysics.absorbBuriedAndExcess(in: lowerRoot, fillProgress: 1.0)
+                    }
                 }
             } else {
                 root.transform = rest
                 root.isEnabled = true
+                if let metalRing {
+                    GrainPhysics.setRingPhysicsMode(metalRing, mode: .static)
+                }
             }
         } else {
             root.isEnabled = false
@@ -466,6 +546,8 @@ final class AppModel {
         filledCount = 0
         isComplete = false
         unlockedTier = .universe
+        stopGrainSimulationLoop()
+        grainSims.removeAll()
         tierRoots.removeAll()
         tierSlotsParents.removeAll()
         crownEntity = nil
@@ -474,6 +556,11 @@ final class AppModel {
         mandalaRoot.position = SIMD3(0, 1.05, -0.78)
         mandalaRoot.orientation = simd_quatf(angle: -0.22, axis: SIMD3(1, 0, 0))
 
+        // Localized sim so gravity is "down" in mandala space (toward the plate).
+        var simulation = PhysicsSimulationComponent()
+        simulation.gravity = SIMD3(0, -9.81, 0)
+        mandalaRoot.components.set(simulation)
+
         mandalaRoot.addChild(MandalaBuilder.makePlate())
 
         for tier in MandalaTier.allCases {
@@ -481,6 +568,11 @@ final class AppModel {
             let tierRoot = MandalaBuilder.makeTier(tier: tier, unlocked: unlocked)
             mandalaRoot.addChild(tierRoot)
             tierRoots[tier] = tierRoot
+
+            if let sim = GrainGPUSimulator(tier: tier) {
+                sim.attach(to: tierRoot)
+                grainSims[tier] = sim
+            }
 
             guard let slotsParent = tierRoot.findEntity(named: "TierSlots") else { continue }
             tierSlotsParents[tier] = slotsParent
@@ -500,7 +592,8 @@ final class AppModel {
 
         paletteRoot = Entity()
         paletteRoot.name = "Palette"
-        paletteRoot.position = SIMD3(0, -0.02, 0.62)
+        // Park beside the mandala (not in front) so the bottom ring stays clear.
+        paletteRoot.position = SIMD3(0.62, 0.08, 0.08)
         mandalaRoot.addChild(paletteRoot)
     }
 
@@ -508,23 +601,27 @@ final class AppModel {
         paletteRoot.children.removeAll()
 
         let kinds = HeapMaterialKind.allCases
-        let spacing: Float = 0.075
-        let startX = -spacing * Float(kinds.count - 1) / 2
+        let spacing: Float = 0.072
+        let startY = spacing * Float(kinds.count - 1) / 2
 
         var trayMat = SimpleMaterial()
         trayMat.color = .init(tint: UIColor(red: 0.25, green: 0.18, blue: 0.10, alpha: 1))
         trayMat.metallic = .float(0.2)
         trayMat.roughness = .float(0.6)
         let tray = ModelEntity(
-            mesh: .generateBox(size: SIMD3(spacing * Float(kinds.count) + 0.04, 0.012, 0.08), cornerRadius: 0.01),
+            mesh: .generateBox(
+                size: SIMD3(0.08, spacing * Float(kinds.count) + 0.04, 0.012),
+                cornerRadius: 0.01
+            ),
             materials: [trayMat]
         )
-        tray.position = SIMD3(0, -0.02, 0)
+        tray.position = SIMD3(0, 0, -0.02)
         paletteRoot.addChild(tray)
 
         for (i, kind) in kinds.enumerated() {
             let orb = MandalaBuilder.makePaletteOrb(kind: kind, selected: kind == selectedMaterial)
-            orb.position = SIMD3(startX + spacing * Float(i), 0.02, 0)
+            // Vertical strip on the right — keeps the front of the base ring open.
+            orb.position = SIMD3(0, startY - spacing * Float(i), 0)
             paletteRoot.addChild(orb)
         }
     }
@@ -647,7 +744,7 @@ final class AppModel {
             handleTap(on: slot)
             print("[AUTOPLAY] placed \(step + 1) unlocked=\(unlockedTier.shortTitle) filled=\(filledCount)")
             let tierBoundary = step + 1 == 17 || step + 1 == 25 || step + 1 == 33
-            try? await Task.sleep(for: .milliseconds(tierBoundary ? 1400 : 700))
+            try? await Task.sleep(for: .milliseconds(tierBoundary ? 2200 : 1600))
         }
         if let crown = crownEntity {
             let p = crown.position(relativeTo: mandalaRoot)

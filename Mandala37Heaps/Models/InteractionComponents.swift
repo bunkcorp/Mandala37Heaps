@@ -1,3 +1,4 @@
+import Foundation
 import RealityKit
 
 struct HeapSlotComponent: Component, Codable {
@@ -23,5 +24,16 @@ struct GrainFillComponent: Component, Codable {
 
     static func register() {
         GrainFillComponent.registerComponent()
+    }
+}
+
+/// A rigid-body grain cluster used for hybrid surface physics (not every rice grain).
+struct PhysicalGrainComponent: Component, Codable {
+    var tierRaw: Int
+    var birthTime: TimeInterval
+    var isFrozen: Bool
+
+    static func register() {
+        PhysicalGrainComponent.registerComponent()
     }
 }
