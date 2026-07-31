@@ -12,6 +12,7 @@ struct Mandala37HeapsApp: App {
     init() {
         HeapSlotComponent.register()
         PaletteItemComponent.register()
+        GrainFillComponent.register()
     }
 
     var body: some Scene {

@@ -108,12 +108,9 @@ final class AppModel {
 
                 placeHeapForAutoPlay(at: index)
 
-                // Let celestial unlock settle before heaps 34–37 + centerpiece.
-                if index == 32 {
-                    try? await Task.sleep(for: .milliseconds(700))
-                } else {
-                    try? await Task.sleep(for: .milliseconds(280))
-                }
+                // Allow heap settle + grain rise; longer pause when a new ring descends.
+                let tierBoundary = index == 16 || index == 24 || index == 32
+                try? await Task.sleep(for: .milliseconds(tierBoundary ? 1400 : 700))
             }
         }
     }
@@ -240,7 +237,11 @@ final class AppModel {
         if definition.number == 1 {
             heap = MandalaBuilder.makeMountMeru(scale: definition.heapScale)
         } else {
-            heap = MandalaBuilder.makeHeap(kind: material, scale: definition.heapScale)
+            heap = MandalaBuilder.makeHeap(
+                kind: material,
+                scale: definition.heapScale,
+                heapNumber: definition.number
+            )
         }
         heap.position = SIMD3(0, 0.005, 0)
         slotEntities[index].addChild(heap)
@@ -252,15 +253,77 @@ final class AppModel {
         let grown = Transform(scale: .one, rotation: heap.orientation, translation: heap.position)
         heap.move(to: grown, relativeTo: heap.parent, duration: 0.28, timingFunction: .easeOut)
 
-        maybeUnlockNextTier()
+        refreshHighlights()
+        updateStatus()
 
-        if filledCount >= 37 {
-            // Final middle piece on the celestial ring — after all 37 heaps.
-            placeTopCenterpiece()
-        } else {
-            refreshHighlights()
-            updateStatus()
+        let tier = definition.tier
+        let completedOnTier = tier.heapNumbers.filter { filled[$0 - 1] }.count
+        let totalOnTier = tier.heapNumbers.count
+
+        // Keep heap visible briefly, then merge into the common fill and raise the grain.
+        Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(280))
+            guard heapEntities[index] === heap else { return }
+
+            if definition.number == 1 {
+                // Mount Meru stays proud; only the shared grain rises under it.
+                if let tierEntity = tierRoots[tier] {
+                    MandalaBuilder.setTierFillProgress(
+                        tierEntity: tierEntity,
+                        progress: grainFillProgress(completed: completedOnTier, total: totalOnTier)
+                    )
+                }
+            } else {
+                settleOfferingHeap(
+                    heap,
+                    into: tier,
+                    completed: completedOnTier,
+                    total: totalOnTier
+                )
+            }
+
+            try? await Task.sleep(for: .milliseconds(480))
+            maybeUnlockNextTier()
+
+            if filledCount >= 37 {
+                placeTopCenterpiece()
+            } else {
+                updateStatus()
+            }
         }
+    }
+
+    /// Non-linear fill: thin base early, then rises to the rim as the ring completes.
+    private func grainFillProgress(completed: Int, total: Int) -> Float {
+        guard total > 0 else { return 0.03 }
+        let ritualProgress = Float(completed) / Float(total)
+        return 0.05 + 0.95 * pow(ritualProgress, 0.72)
+    }
+
+    /// Spread / compress a placed heap so it contributes to the shared grain mass.
+    private func settleOfferingHeap(
+        _ heap: Entity,
+        into tier: MandalaTier,
+        completed: Int,
+        total: Int
+    ) {
+        var settledTransform = heap.transform
+        settledTransform.scale.x *= 1.22
+        settledTransform.scale.z *= 1.22
+        settledTransform.scale.y *= 0.48
+        settledTransform.translation.y -= 0.012
+        heap.move(
+            to: settledTransform,
+            relativeTo: heap.parent,
+            duration: 0.55,
+            timingFunction: .easeInOut
+        )
+
+        guard let tierEntity = tierRoots[tier] else { return }
+        MandalaBuilder.setTierFillProgress(
+            tierEntity: tierEntity,
+            progress: grainFillProgress(completed: completed, total: total)
+        )
     }
 
     private func maybeUnlockNextTier() {
@@ -271,6 +334,15 @@ final class AppModel {
             let tierComplete = range.allSatisfy { filled[$0 - 1] }
             guard tierComplete else { break }
 
+            // Ensure the completed ring's grain is packed to the rim before the next settles.
+            if let lower = tierRoots[unlockedTier] {
+                MandalaBuilder.setTierFillProgress(
+                    tierEntity: lower,
+                    progress: 1.0,
+                    animated: true
+                )
+            }
+
             unlockedTier = next
             applyTierUnlocked(next, unlocked: true, animate: true)
             statusMessage = "Ring placed · \(next.title) unlocked"
@@ -279,25 +351,40 @@ final class AppModel {
 
     private func applyTierUnlocked(_ tier: MandalaTier, unlocked: Bool, animate: Bool) {
         guard let root = tierRoots[tier] else { return }
+        let rest = Transform(translation: SIMD3(0, tier.surfaceY, 0))
 
         if unlocked {
             if animate {
-                root.position = SIMD3(0, 0.22, 0)
-                root.scale = SIMD3(repeating: 0.35)
+                if let lower = MandalaTier(rawValue: tier.rawValue - 1),
+                   let lowerRoot = tierRoots[lower] {
+                    MandalaBuilder.compressGrainUnderRing(lowerTier: lowerRoot)
+                }
+
+                // Descend into the packed grain of the ring below (not a tiny pop-in).
+                var starting = rest
+                starting.translation.y += 0.09
+                starting.scale = SIMD3(repeating: 1.015)
+                root.transform = starting
                 root.isEnabled = true
                 root.move(
-                    to: Transform(),
+                    to: rest,
                     relativeTo: root.parent,
-                    duration: 0.6,
-                    timingFunction: .easeOut
+                    duration: 0.8,
+                    timingFunction: .easeInOut
                 )
+                Task { @MainActor in
+                    try? await Task.sleep(for: .milliseconds(850))
+                    guard tierRoots[tier] === root else { return }
+                    root.transform = rest
+                    root.isEnabled = true
+                }
             } else {
-                root.transform = .init()
+                root.transform = rest
                 root.isEnabled = true
             }
         } else {
             root.isEnabled = false
-            root.transform = .init()
+            root.transform = rest
         }
     }
 
@@ -309,7 +396,7 @@ final class AppModel {
 
         // Finish any in-flight unlock settle so parenting isn't mid-scale/mid-drop.
         if let celestialRoot = tierRoots[.celestial] {
-            celestialRoot.transform = .init()
+            celestialRoot.transform = Transform(translation: SIMD3(0, MandalaTier.celestial.surfaceY, 0))
             celestialRoot.isEnabled = true
         }
 
@@ -319,13 +406,13 @@ final class AppModel {
         let crown = MandalaBuilder.makeTopOrnament()
         // Static ornament — never add PhysicsBody / PhysicsMotion (would fall through the deck).
 
-        // Same host + Y as successful heaps: TierSlots sits on the fill (local Y 0.014),
-        // heaps rest at +0.005. Center of the celestial deck (r=0); cardinals stay at r≈0.08.
+        // Same host + Y as successful heaps: TierSlots sits on the fill, heaps rest at +0.005.
+        // Center of the celestial deck (r=0); cardinals stay at r≈0.08.
         let host: Entity = tierSlotsParents[.celestial]
             ?? tierRoots[.celestial]?.findEntity(named: "TierSlots")
             ?? mandalaRoot
         let seatY: Float = (host === mandalaRoot)
-            ? MandalaTier.celestial.surfaceY + 0.019
+            ? MandalaTier.celestial.surfaceY + MandalaTier.celestial.slotsY + 0.005
             : 0.005
         crown.position = SIMD3(0, seatY, 0)
         // Compact finial (~55% of prior visual size). Grow via transform.scale only —
@@ -559,12 +646,8 @@ final class AppModel {
             }
             handleTap(on: slot)
             print("[AUTOPLAY] placed \(step + 1) unlocked=\(unlockedTier.shortTitle) filled=\(filledCount)")
-            // Let celestial unlock settle before heaps 34–37 + centerpiece.
-            if step + 1 == 33 {
-                try? await Task.sleep(for: .milliseconds(700))
-            } else {
-                try? await Task.sleep(for: .milliseconds(90))
-            }
+            let tierBoundary = step + 1 == 17 || step + 1 == 25 || step + 1 == 33
+            try? await Task.sleep(for: .milliseconds(tierBoundary ? 1400 : 700))
         }
         if let crown = crownEntity {
             let p = crown.position(relativeTo: mandalaRoot)

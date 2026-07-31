@@ -30,7 +30,8 @@ struct ImmersiveView: View {
             appModel.didRunDebugGameplay = true
             try? await Task.sleep(for: .seconds(2))
             if arguments.contains("-autoPlay") {
-                await appModel.debugAutoPlay()
+                // Use gameplay autoplay (no post-run reset) so stacked rings stay visible.
+                appModel.startAutoPlay()
             } else {
                 await appModel.debugPlaceDemoHeaps()
             }

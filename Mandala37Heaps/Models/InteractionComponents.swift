@@ -15,3 +15,13 @@ struct PaletteItemComponent: Component, Codable {
         PaletteItemComponent.registerComponent()
     }
 }
+
+/// Tracks growing grain fill inside a metal ring (progress 0…1 maps to rim height).
+struct GrainFillComponent: Component, Codable {
+    var maximumHeight: Float
+    var progress: Float
+
+    static func register() {
+        GrainFillComponent.registerComponent()
+    }
+}

@@ -65,17 +65,44 @@ enum MandalaTier: Int, CaseIterable, Identifiable {
         }
     }
 
-    /// Local Y of the fill surface relative to the mandala root (plate top ≈ 0.034).
+    /// Local Y of this tier band's bottom (ring wall bottom) relative to the mandala root.
+    ///
+    /// Geometry (see `MandalaBuilder.makeTier`):
+    /// - Ring wall is a box fence of height `ringWallHeight`, centered at local Y = h/2,
+    ///   so it spans **[0, ringWallHeight]** (bottom on the band origin, not half below it).
+    /// - Fill deck is `deckThickness` tall with its top near the rim (not a 1.2 cm wafer at Y=0).
+    /// - Next tier root sits at `surfaceY + tierStep`, where `tierStep` is wall height minus an
+    ///   8 mm overlap so rims bite instead of showing a hairline gap under perspective.
     var surfaceY: Float {
-        switch self {
-        case .universe: return 0.055
-        case .treasures: return 0.108
-        case .goddesses: return 0.161
-        case .celestial: return 0.214
-        }
+        Self.baseSurfaceY + Float(rawValue) * Self.tierStep
     }
 
-    var ringHeight: Float { 0.042 }
+    /// First-ring band origin above mandala root (plate rim top ≈ 0.041).
+    static let baseSurfaceY: Float = 0.041
+
+    /// Metal fence wall height.
+    var ringHeight: Float { Self.ringWallHeight }
+
+    static let ringWallHeight: Float = 0.075
+
+    /// Negative stack overlap so upper wall bottom bites into lower wall/deck (~8 mm).
+    /// Prior 0–2 mm still read as a float under perspective + grounding shadows.
+    static let stackOverlap: Float = 0.008
+
+    /// Vertical advance per tier (= wall height − overlap).
+    static let tierStep: Float = ringWallHeight - stackOverlap
+
+    /// Grain fill thickness — flush with the wall rim so the next ring sits on the deck.
+    static let deckThickness: Float = ringWallHeight
+
+    /// Local Y of the fill top / heap seat plane relative to the tier band origin.
+    var deckTopY: Float { Self.deckThickness }
+
+    /// Local Y for `TierSlots` (just above the fill top).
+    var slotsY: Float { Self.deckThickness + 0.001 }
+
+    /// Fill mesh radius: out to the inner face of the metal wall (no annular trench).
+    var fillRadius: Float { max(deckRadius, ringRadius - 0.010) }
 
     var next: MandalaTier? {
         MandalaTier(rawValue: rawValue + 1)
@@ -101,7 +128,7 @@ struct HeapDefinition {
         // —— Tier 0 / first ring: Meru, continents, subcontinents, four treasures (1–17) ——
         items.append(HeapDefinition(
             number: 1, name: "Mount Meru", preferredMaterial: .gold,
-            tier: .universe, radiusFraction: 0, angleDegrees: 0, heapScale: 1.55
+            tier: .universe, radiusFraction: 0, angleDegrees: 0, heapScale: 1.00
         ))
 
         // Outer rim continents — East at bottom (90°).
@@ -114,7 +141,7 @@ struct HeapDefinition {
         for (i, c) in continents.enumerated() {
             items.append(HeapDefinition(
                 number: 2 + i, name: c.0, preferredMaterial: c.1,
-                tier: .universe, radiusFraction: 0.62, angleDegrees: c.2, heapScale: 0.95
+                tier: .universe, radiusFraction: 0.62, angleDegrees: c.2, heapScale: 0.88
             ))
         }
 
@@ -134,7 +161,7 @@ struct HeapDefinition {
         for (i, s) in subs.enumerated() {
             items.append(HeapDefinition(
                 number: 6 + i, name: s.0, preferredMaterial: .grain,
-                tier: .universe, radiusFraction: 0.90, angleDegrees: s.1, heapScale: 0.68
+                tier: .universe, radiusFraction: 0.90, angleDegrees: s.1, heapScale: 0.72
             ))
         }
 
@@ -148,7 +175,7 @@ struct HeapDefinition {
         for (i, t) in innerCross.enumerated() {
             items.append(HeapDefinition(
                 number: 14 + i, name: t.0, preferredMaterial: t.1,
-                tier: .universe, radiusFraction: 0.32, angleDegrees: t.2, heapScale: 0.82
+                tier: .universe, radiusFraction: 0.32, angleDegrees: t.2, heapScale: 0.78
             ))
         }
 
@@ -166,7 +193,7 @@ struct HeapDefinition {
         for (i, e) in emblems.enumerated() {
             items.append(HeapDefinition(
                 number: 18 + i, name: e.0, preferredMaterial: e.1,
-                tier: .treasures, radiusFraction: 0.70, angleDegrees: e.2, heapScale: 0.74
+                tier: .treasures, radiusFraction: 0.70, angleDegrees: e.2, heapScale: 0.68
             ))
         }
 
@@ -184,7 +211,7 @@ struct HeapDefinition {
         for (i, g) in goddesses.enumerated() {
             items.append(HeapDefinition(
                 number: 26 + i, name: g.0, preferredMaterial: g.1,
-                tier: .goddesses, radiusFraction: 0.68, angleDegrees: g.2, heapScale: 0.68
+                tier: .goddesses, radiusFraction: 0.68, angleDegrees: g.2, heapScale: 0.62
             ))
         }
 
@@ -199,7 +226,7 @@ struct HeapDefinition {
         for (i, o) in celestial.enumerated() {
             items.append(HeapDefinition(
                 number: 34 + i, name: o.0, preferredMaterial: o.1,
-                tier: .celestial, radiusFraction: 0.68, angleDegrees: o.2, heapScale: 0.75
+                tier: .celestial, radiusFraction: 0.68, angleDegrees: o.2, heapScale: 0.58
             ))
         }
 
