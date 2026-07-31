@@ -5,7 +5,6 @@ struct Mandala37HeapsApp: App {
     @State private var appModel = AppModel()
 
     @Environment(\.dismissImmersiveSpace) private var dismissImmersiveSpace
-    @Environment(\.dismissWindow) private var dismissWindow
     @Environment(\.openImmersiveSpace) private var openImmersiveSpace
     @Environment(\.openWindow) private var openWindow
     @Environment(\.scenePhase) private var scenePhase
@@ -47,8 +46,8 @@ struct Mandala37HeapsApp: App {
         switch await openImmersiveSpace(id: ImmersiveScene.sceneID) {
         case .opened:
             appModel.immersiveSpaceState = .open
-            try? await Task.sleep(for: .milliseconds(250))
-            dismissWindow(id: ContentWindow.sceneID)
+            // Keep ContentWindow open for gameplay controls — ornaments are not
+            // supported inside ImmersiveSpace.
         case .userCancelled, .error:
             fallthrough
         @unknown default:

@@ -8,6 +8,6 @@ struct ContentWindow: Scene {
             ContentView()
         }
         .windowStyle(.plain)
-        .defaultSize(width: 520, height: 640)
+        .defaultSize(width: 560, height: 640)
     }
 }

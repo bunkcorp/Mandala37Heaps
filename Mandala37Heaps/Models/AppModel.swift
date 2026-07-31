@@ -24,8 +24,9 @@ final class AppModel {
     var filledCount: Int = 0
     var isComplete: Bool = false
     var unlockedTier: MandalaTier = .universe
-    var statusMessage: String = "Level 1 · Tap the glowing spot for Mount Meru."
+    var statusMessage: String = "Level 1 · Tap the glowing beacon for Mount Meru."
     var isMandalaBuilt = false
+    var isAutoPlaying = false
     var didProcessDebugLaunchArguments = false
     var didRunDebugGameplay = false
 
@@ -41,6 +42,7 @@ final class AppModel {
     private var celebrationEntity: Entity?
     private var pulseTask: Task<Void, Never>?
     private var highlightPulseTask: Task<Void, Never>?
+    private var autoPlayTask: Task<Void, Never>?
 
     var nextGuidedIndex: Int? {
         filled.firstIndex(of: false)
@@ -48,7 +50,7 @@ final class AppModel {
 
     var progressLabel: String {
         if isComplete {
-            return "Mandala Complete — 37 of 37"
+            return "Mandala Complete — centerpiece placed"
         }
         return "\(unlockedTier.title) · Heap \(filledCount + 1) of 37"
     }
@@ -73,7 +75,55 @@ final class AppModel {
     }
 
     func exitMandala() {
+        stopAutoPlay()
         viewState = .portal
+    }
+
+    func toggleAutoPlay() {
+        if isAutoPlaying {
+            stopAutoPlay()
+        } else {
+            startAutoPlay()
+        }
+    }
+
+    func startAutoPlay() {
+        guard !isAutoPlaying, !isComplete else { return }
+        prepareMandalaIfNeeded()
+        isAutoPlaying = true
+        statusMessage = "Playing… placing remaining heaps"
+        autoPlayTask?.cancel()
+        autoPlayTask = Task { @MainActor in
+            defer {
+                isAutoPlaying = false
+                autoPlayTask = nil
+                if !Task.isCancelled {
+                    updateStatus()
+                }
+            }
+            for index in 0..<37 {
+                guard !Task.isCancelled else { return }
+                if filled[index] { continue }
+                if isComplete { break }
+
+                placeHeapForAutoPlay(at: index)
+
+                // Let celestial unlock settle before heaps 34–37 + centerpiece.
+                if index == 32 {
+                    try? await Task.sleep(for: .milliseconds(700))
+                } else {
+                    try? await Task.sleep(for: .milliseconds(280))
+                }
+            }
+        }
+    }
+
+    func stopAutoPlay() {
+        guard isAutoPlaying || autoPlayTask != nil else { return }
+        autoPlayTask?.cancel()
+        autoPlayTask = nil
+        isAutoPlaying = false
+        updateStatus()
     }
 
     func handleBackground() {
@@ -95,16 +145,30 @@ final class AppModel {
     }
 
     func handleTap(on entity: Entity) {
-        if let kind = paletteKind(from: entity) {
-            selectMaterial(kind)
+        if paletteKind(from: entity) != nil {
+            // Guided: any palette tap places the next heap (material is auto-chosen).
+            if playMode == .guided, let next = nextGuidedIndex, !isComplete {
+                placeHeap(at: next)
+                return
+            }
+            if let kind = paletteKind(from: entity) {
+                selectMaterial(kind)
+            }
             return
         }
         if let index = heapSlotIndex(from: entity) {
+            if playMode == .guided, let next = nextGuidedIndex {
+                if index == next || isNearGuidedTarget(tappedIndex: index, nextIndex: next) {
+                    placeHeap(at: next)
+                    return
+                }
+            }
             placeHeap(at: index)
         }
     }
 
     func resetMandala() {
+        stopAutoPlay()
         for i in 0..<37 {
             heapEntities[i]?.removeFromParent()
             heapEntities[i] = nil
@@ -131,6 +195,15 @@ final class AppModel {
     // MARK: - Placement
 
     private func placeHeap(at index: Int) {
+        placeHeap(at: index, bypassGuidedOrder: false, forcePreferredMaterial: false)
+    }
+
+    /// Autoplay placement: skips already-filled checks' guided-order gate and uses each heap's preferred material.
+    private func placeHeapForAutoPlay(at index: Int) {
+        placeHeap(at: index, bypassGuidedOrder: true, forcePreferredMaterial: true)
+    }
+
+    private func placeHeap(at index: Int, bypassGuidedOrder: Bool, forcePreferredMaterial: Bool) {
         guard HeapDefinition.all.indices.contains(index) else { return }
         let definition = HeapDefinition.all[index]
 
@@ -147,15 +220,15 @@ final class AppModel {
             return
         }
 
-        if playMode == .guided, let next = nextGuidedIndex, index != next {
+        if !bypassGuidedOrder, playMode == .guided, let next = nextGuidedIndex, index != next {
             let name = HeapDefinition.all[next].name
-            statusMessage = "\(name) · Tap the glowing spot · Heap \(next + 1) of 37"
+            statusMessage = "\(name) · Tap the glowing beacon · Heap \(next + 1) of 37"
             pulseSlot(at: next)
             return
         }
 
         let material: HeapMaterialKind
-        if playMode == .guided {
+        if playMode == .guided || forcePreferredMaterial {
             material = definition.preferredMaterial
             selectedMaterial = material
             rebuildPalette()
@@ -182,7 +255,8 @@ final class AppModel {
         maybeUnlockNextTier()
 
         if filledCount >= 37 {
-            completeMandala()
+            // Final middle piece on the celestial ring — after all 37 heaps.
+            placeTopCenterpiece()
         } else {
             refreshHighlights()
             updateStatus()
@@ -190,7 +264,8 @@ final class AppModel {
     }
 
     private func maybeUnlockNextTier() {
-        // Unlock the next ring once every heap on the current tier is filled.
+        // Unlock the next ring once every heap on the current ring is filled
+        // (1–17 → 18–25 → 26–33 → 34–37; centerpiece follows after 37).
         while let next = unlockedTier.next {
             let range = unlockedTier.heapNumbers
             let tierComplete = range.allSatisfy { filled[$0 - 1] }
@@ -226,45 +301,68 @@ final class AppModel {
         }
     }
 
-    private func completeMandala() {
+    /// Last placement: pedestal + flame/gem finial in the middle of the celestial (top) ring.
+    private func placeTopCenterpiece() {
         isComplete = true
-        statusMessage = "Mandala Complete — top ornament placed"
+        statusMessage = "Final piece · Centerpiece on the celestial ring"
         refreshHighlights()
 
-        // Crown / top ornament on the celestial tier.
-        crownEntity?.removeFromParent()
-        let crown = MandalaBuilder.makeTopOrnament()
-        // Sit in the empty center of the celestial ring, clearly above the sun/moon/etc.
-        crown.position = SIMD3(0, MandalaTier.celestial.surfaceY + 0.02, 0)
-        crown.scale = SIMD3(repeating: 0.15)
-        mandalaRoot.addChild(crown)
-        crownEntity = crown
-        let grown = Transform(
-            scale: SIMD3(repeating: 1.15),
-            rotation: .init(),
-            translation: crown.position
-        )
-        crown.move(to: grown, relativeTo: mandalaRoot, duration: 0.55, timingFunction: .easeOut)
+        // Finish any in-flight unlock settle so parenting isn't mid-scale/mid-drop.
+        if let celestialRoot = tierRoots[.celestial] {
+            celestialRoot.transform = .init()
+            celestialRoot.isEnabled = true
+        }
 
+        crownEntity?.removeFromParent()
         celebrationEntity?.removeFromParent()
+
+        let crown = MandalaBuilder.makeTopOrnament()
+        // Static ornament — never add PhysicsBody / PhysicsMotion (would fall through the deck).
+
+        // Same host + Y as successful heaps: TierSlots sits on the fill (local Y 0.014),
+        // heaps rest at +0.005. Center of the celestial deck (r=0); cardinals stay at r≈0.08.
+        let host: Entity = tierSlotsParents[.celestial]
+            ?? tierRoots[.celestial]?.findEntity(named: "TierSlots")
+            ?? mandalaRoot
+        let seatY: Float = (host === mandalaRoot)
+            ? MandalaTier.celestial.surfaceY + 0.019
+            : 0.005
+        crown.position = SIMD3(0, seatY, 0)
+        // Compact finial (~55% of prior visual size). Grow via transform.scale only —
+        // never `rotation: simd_quatf()` (zero quat NaNs the move and the piece vanishes).
+        crown.scale = SIMD3(repeating: 0.42)
+        host.addChild(crown)
+        crownEntity = crown
+
+        var grown = crown.transform
+        grown.scale = SIMD3(repeating: 0.72)
+        crown.move(to: grown, relativeTo: host, duration: 0.55, timingFunction: .easeOut)
+
         let burst = MandalaBuilder.makeCelebrationBurst()
-        burst.position = SIMD3(0, MandalaTier.celestial.surfaceY + 0.18, 0)
-        mandalaRoot.addChild(burst)
+        // Burst above the finial tip (pedestal + flame ~0.20 × scale 0.72).
+        burst.position = SIMD3(0, seatY + 0.28, 0)
+        burst.scale = SIMD3(repeating: 0.28)
+        host.addChild(burst)
         celebrationEntity = burst
 
-        burst.scale = SIMD3(repeating: 0.4)
-        let expanded = Transform(scale: SIMD3(repeating: 2.2), rotation: .init(), translation: burst.position)
-        burst.move(to: expanded, relativeTo: mandalaRoot, duration: 1.4, timingFunction: .easeOut)
+        var expanded = burst.transform
+        expanded.scale = SIMD3(repeating: 1.15)
+        burst.move(to: expanded, relativeTo: host, duration: 1.2, timingFunction: .easeOut)
 
         pulseTask?.cancel()
         pulseTask = Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(400))
+            guard !Task.isCancelled else { return }
+            statusMessage = "Mandala Complete — centerpiece placed"
             for _ in 0..<3 {
                 guard !Task.isCancelled else { return }
-                let bright = Transform(scale: SIMD3(repeating: 2.4), rotation: .init(), translation: burst.position)
-                burst.move(to: bright, relativeTo: mandalaRoot, duration: 0.45, timingFunction: .easeInOut)
+                var bright = burst.transform
+                bright.scale = SIMD3(repeating: 1.35)
+                burst.move(to: bright, relativeTo: host, duration: 0.45, timingFunction: .easeInOut)
                 try? await Task.sleep(for: .milliseconds(450))
-                let dim = Transform(scale: SIMD3(repeating: 1.6), rotation: .init(), translation: burst.position)
-                burst.move(to: dim, relativeTo: mandalaRoot, duration: 0.45, timingFunction: .easeInOut)
+                var dim = burst.transform
+                dim.scale = SIMD3(repeating: 0.95)
+                burst.move(to: dim, relativeTo: host, duration: 0.45, timingFunction: .easeInOut)
                 try? await Task.sleep(for: .milliseconds(450))
             }
         }
@@ -359,12 +457,15 @@ final class AppModel {
             let position = oldSlot.position
             oldSlot.removeFromParent()
 
-            let interactive = definition.tier.rawValue <= unlockedTier.rawValue
-            let highlighted = (highlightIndex == i) && !filled[i] && interactive
+            let unlocked = definition.tier.rawValue <= unlockedTier.rawValue
+            let highlighted = (highlightIndex == i) && !filled[i] && unlocked
+            // Empty unlocked slots stay tappable; guided near-miss maps neighbors to the beacon.
+            // Highlighted slot uses a much larger collision (see MandalaBuilder).
+            let interactive = !filled[i] && unlocked
             let newSlot = MandalaBuilder.makeSlotMarker(
                 definition: definition,
                 highlighted: highlighted,
-                interactive: interactive && !filled[i]
+                interactive: interactive
             )
             // Filled slots keep a passive marker but no need to re-tap.
             if filled[i] {
@@ -426,14 +527,22 @@ final class AppModel {
 
     private func updateStatus() {
         if isComplete {
-            statusMessage = "Mandala Complete — top ornament placed"
+            statusMessage = "Mandala Complete — centerpiece placed"
+            return
+        }
+        if isAutoPlaying {
+            if let name = nextHeapName, let index = nextGuidedIndex {
+                statusMessage = "Playing… \(name) · \(index + 1)/37"
+            } else {
+                statusMessage = "Playing… placing remaining heaps"
+            }
             return
         }
         switch playMode {
         case .guided:
             if let name = nextHeapName, let index = nextGuidedIndex {
                 let tier = HeapDefinition.all[index].tier
-                statusMessage = "\(tier.shortTitle) · \(name) · Tap the glowing spot · \(index + 1)/37"
+                statusMessage = "\(tier.shortTitle) · \(name) · Tap the glowing beacon (or palette) · \(index + 1)/37"
             }
         case .free:
             statusMessage = "Free · \(unlockedTier.title) — place on the unlocked ring only."
@@ -450,9 +559,20 @@ final class AppModel {
             }
             handleTap(on: slot)
             print("[AUTOPLAY] placed \(step + 1) unlocked=\(unlockedTier.shortTitle) filled=\(filledCount)")
-            try? await Task.sleep(for: .milliseconds(90))
+            // Let celestial unlock settle before heaps 34–37 + centerpiece.
+            if step + 1 == 33 {
+                try? await Task.sleep(for: .milliseconds(700))
+            } else {
+                try? await Task.sleep(for: .milliseconds(90))
+            }
         }
-        try? await Task.sleep(for: .seconds(6))
+        if let crown = crownEntity {
+            let p = crown.position(relativeTo: mandalaRoot)
+            print("[AUTOPLAY] centerpiece parent=\(crown.parent?.name ?? "nil") pos=\(p) scale=\(crown.scale)")
+        } else {
+            print("[AUTOPLAY] ERROR: centerpiece missing after heap 37")
+        }
+        try? await Task.sleep(for: .seconds(12))
         resetMandala()
         print("[AUTOPLAY] done")
     }
@@ -476,6 +596,18 @@ final class AppModel {
             current = node.parent
         }
         return nil
+    }
+
+    /// Forgiving guided aim: a hit on a nearby empty slot still counts as the glowing target.
+    private func isNearGuidedTarget(tappedIndex: Int, nextIndex: Int, radius: Float = 0.18) -> Bool {
+        guard slotEntities.indices.contains(tappedIndex),
+              slotEntities.indices.contains(nextIndex) else { return false }
+        let tapped = slotEntities[tappedIndex].position(relativeTo: nil)
+        let target = slotEntities[nextIndex].position(relativeTo: nil)
+        let dx = tapped.x - target.x
+        let dy = tapped.y - target.y
+        let dz = tapped.z - target.z
+        return sqrt(dx * dx + dy * dy + dz * dz) <= radius
     }
 
     private func paletteKind(from entity: Entity) -> HeapMaterialKind? {

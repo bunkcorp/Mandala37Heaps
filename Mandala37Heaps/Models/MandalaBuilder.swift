@@ -2,7 +2,8 @@ import RealityKit
 import UIKit
 
 enum MandalaBuilder {
-    static func makePlate(radius: Float = 0.52) -> Entity {
+    /// Base plate under the largest ring (heaps 1–17). Slightly oversized vs the metal fence.
+    static func makePlate(radius: Float = 0.56) -> Entity {
         let root = Entity()
         root.name = "MandalaPlate"
 
@@ -126,7 +127,10 @@ enum MandalaBuilder {
         return root
     }
 
-    /// Traditional mandala-set finial: pearl dome + flame plate with turquoise gem.
+    /// Traditional mandala-set finial: pedestal + flame plate with turquoise gem.
+    /// Final centerpiece (heap 38) in the middle of the top ring after heaps 34–37.
+    /// Origin is at the pedestal base (sits on the deck). No physics — static placement only.
+    /// Compact footprint for celestial ring (r=0.15); cardinals near r≈0.08.
     static func makeTopOrnament() -> Entity {
         let root = Entity()
         root.name = "TopOrnament"
@@ -136,13 +140,10 @@ enum MandalaBuilder {
         gold.metallic = .float(0.95)
         gold.roughness = .float(0.22)
 
-        var pearl = SimpleMaterial()
-        pearl.color = .init(tint: UIColor(red: 0.95, green: 0.94, blue: 0.90, alpha: 1))
-        pearl.metallic = .float(0.55)
-        pearl.roughness = .float(0.2)
-
-        // Stepped pedestal
-        for (i, radius) in ([0.07, 0.055, 0.04] as [Float]).enumerated() {
+        // Compact pedestal — leaves room for sun/moon/parasol/banner at r≈0.08.
+        // Three steps; top surface at Y = 0.006 + 2×0.012 + 0.006 = 0.036.
+        let pedestalTopY: Float = 0.036
+        for (i, radius) in ([0.032, 0.026, 0.020] as [Float]).enumerated() {
             let step = ModelEntity(
                 mesh: .generateCylinder(height: 0.012, radius: radius),
                 materials: [gold]
@@ -151,71 +152,44 @@ enum MandalaBuilder {
             root.addChild(step)
         }
 
-        // Pearl-covered dome (sphere nestled on the pedestal)
-        let dome = ModelEntity(mesh: .generateSphere(radius: 0.055), materials: [pearl])
-        dome.name = "PearlDome"
-        dome.position = SIMD3(0, 0.078, 0)
-        dome.components.set(GroundingShadowComponent(castsShadow: true))
-        root.addChild(dome)
-
-        // Stud the dome with pearl beads like a traditional set.
-        for ring in 0..<3 {
-            let count = 8 + ring * 4
-            let ringRadius = 0.028 + Float(ring) * 0.014
-            let ringY = 0.078 + Float(ring) * 0.012
-            for i in 0..<count {
-                let angle = Float(i) * (.pi * 2 / Float(count))
-                let bead = ModelEntity(
-                    mesh: .generateSphere(radius: 0.007),
-                    materials: [pearl]
-                )
-                bead.position = SIMD3(
-                    cos(angle) * ringRadius,
-                    ringY,
-                    sin(angle) * ringRadius
-                )
-                root.addChild(bead)
-            }
-        }
-
-        // Vertical flame / thog: two crossed plates so it reads from any viewing angle.
+        // Flame / thog — seated on pedestal top (no pearl dome above).
+        // Keep cornerRadius well below half-min-dimension or mesh collapses.
         let flameRoot = Entity()
         flameRoot.name = "FlameFinial"
-        flameRoot.position = SIMD3(0, 0.125, 0)
+        flameRoot.position = SIMD3(0, pedestalTopY, 0)
 
         for (i, yaw) in ([0, Float.pi / 2] as [Float]).enumerated() {
             let plate = ModelEntity(
-                mesh: .generateBox(size: SIMD3(0.012, 0.13, 0.085), cornerRadius: 0.038),
+                mesh: .generateBox(size: SIMD3(0.014, 0.14, 0.078), cornerRadius: 0.005),
                 materials: [gold]
             )
             plate.name = "FlamePlate_\(i)"
-            plate.position = SIMD3(0, 0.06, 0)
+            plate.position = SIMD3(0, 0.07, 0)
             plate.orientation = simd_quatf(angle: yaw, axis: SIMD3(0, 1, 0))
             flameRoot.addChild(plate)
         }
 
         let flameTip = ModelEntity(
-            mesh: .generateCone(height: 0.05, radius: 0.032),
+            mesh: .generateCone(height: 0.055, radius: 0.026),
             materials: [gold]
         )
-        flameTip.position = SIMD3(0, 0.14, 0)
+        flameTip.position = SIMD3(0, 0.16, 0)
         flameRoot.addChild(flameTip)
 
-        // Large bright turquoise gem — the signature centerpiece stone.
         let gem = ModelEntity(
-            mesh: .generateSphere(radius: 0.022),
-            materials: [UnlitMaterial(color: UIColor(red: 0.08, green: 0.88, blue: 0.42, alpha: 1))]
+            mesh: .generateSphere(radius: 0.028),
+            materials: [UnlitMaterial(color: UIColor(red: 0.05, green: 0.95, blue: 0.48, alpha: 1))]
         )
         gem.name = "TurquoiseGem"
-        gem.position = SIMD3(0, 0.062, 0)
+        gem.position = SIMD3(0, 0.07, 0)
         flameRoot.addChild(gem)
 
         let bezel = ModelEntity(
-            mesh: .generateSphere(radius: 0.028),
+            mesh: .generateSphere(radius: 0.034),
             materials: [gold]
         )
-        bezel.position = SIMD3(0, 0.062, 0)
-        bezel.scale = SIMD3(1, 0.35, 1)
+        bezel.position = SIMD3(0, 0.07, 0)
+        bezel.scale = SIMD3(1, 0.32, 1)
         flameRoot.addChild(bezel)
 
         root.addChild(flameRoot)
@@ -314,7 +288,7 @@ enum MandalaBuilder {
             beacon.name = "ActiveTargetBeacon"
 
             let glowDisc = ModelEntity(
-                mesh: .generateCylinder(height: 0.006, radius: max(0.045, markerRadius * 2.0)),
+                mesh: .generateCylinder(height: 0.008, radius: max(0.09, markerRadius * 3.6)),
                 materials: [UnlitMaterial(
                     color: UIColor(red: 0.05, green: 0.95, blue: 1.0, alpha: 0.82)
                 )]
@@ -323,28 +297,28 @@ enum MandalaBuilder {
             beacon.addChild(glowDisc)
 
             let column = ModelEntity(
-                mesh: .generateCylinder(height: 0.10, radius: 0.007),
+                mesh: .generateCylinder(height: 0.12, radius: 0.012),
                 materials: [UnlitMaterial(
                     color: UIColor(red: 0.18, green: 0.98, blue: 1.0, alpha: 0.9)
                 )]
             )
-            column.position = SIMD3(0, 0.065, 0)
+            column.position = SIMD3(0, 0.075, 0)
             beacon.addChild(column)
 
             let orb = ModelEntity(
-                mesh: .generateSphere(radius: 0.024),
+                mesh: .generateSphere(radius: 0.032),
                 materials: [UnlitMaterial(
                     color: UIColor(red: 0.75, green: 1.0, blue: 1.0, alpha: 1)
                 )]
             )
-            orb.position = SIMD3(0, 0.125, 0)
+            orb.position = SIMD3(0, 0.145, 0)
             beacon.addChild(orb)
 
             let pointer = ModelEntity(
-                mesh: .generateCone(height: 0.04, radius: 0.02),
+                mesh: .generateCone(height: 0.045, radius: 0.024),
                 materials: [UnlitMaterial(color: UIColor.white)]
             )
-            pointer.position = SIMD3(0, 0.095, 0)
+            pointer.position = SIMD3(0, 0.110, 0)
             pointer.orientation = simd_quatf(angle: .pi, axis: SIMD3(1, 0, 0))
             beacon.addChild(pointer)
 
@@ -352,9 +326,11 @@ enum MandalaBuilder {
         }
 
         if interactive {
-            let hitSize = highlighted ? max(0.09, markerRadius * 2.8) : max(0.05, markerRadius * 2.3)
-            let shape = ShapeResource.generateBox(size: SIMD3(hitSize, 0.16, hitSize))
-                .offsetBy(translation: SIMD3(0, 0.07, 0))
+            // Guided beacon ≈ 3× prior (~28 cm); free slots ≈ 1.8× (~9 cm) to stay local on dense rings.
+            let hitSize = highlighted ? max(0.28, markerRadius * 7.0) : max(0.09, markerRadius * 3.6)
+            let hitHeight: Float = highlighted ? 0.32 : 0.22
+            let shape = ShapeResource.generateBox(size: SIMD3(hitSize, hitHeight, hitSize))
+                .offsetBy(translation: SIMD3(0, hitHeight * 0.45, 0))
             root.components.set(CollisionComponent(shapes: [shape], mode: .trigger))
             root.components.set(InputTargetComponent())
         }
@@ -425,7 +401,7 @@ enum MandalaBuilder {
             root.addChild(halo)
         }
 
-        let shape = ShapeResource.generateSphere(radius: 0.04)
+        let shape = ShapeResource.generateSphere(radius: 0.065)
         root.components.set(CollisionComponent(shapes: [shape], mode: .trigger))
         root.components.set(InputTargetComponent())
         root.components.set(PaletteItemComponent(materialKindRaw: kind.rawValue))

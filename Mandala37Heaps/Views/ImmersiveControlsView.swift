@@ -6,42 +6,67 @@ struct ImmersiveControlsView: View {
     var body: some View {
         @Bindable var appModel = appModel
 
-        HStack(spacing: 14) {
-            VStack(alignment: .leading, spacing: 4) {
+        VStack(alignment: .leading, spacing: 16) {
+            VStack(alignment: .leading, spacing: 6) {
                 Text(appModel.progressLabel)
                     .font(.caption.weight(.semibold))
                     .foregroundStyle(.secondary)
-                Label(appModel.statusMessage, systemImage: "scope")
-                    .font(.headline)
-                    .foregroundStyle(appModel.playMode == .guided ? .cyan : .primary)
-                    .lineLimit(2)
-            }
-            .frame(maxWidth: 430, alignment: .leading)
+                    .fixedSize(horizontal: false, vertical: true)
 
-            Picker("Mode", selection: $appModel.playMode) {
-                ForEach(PlayMode.allCases) { mode in
-                    Text(mode.title).tag(mode)
+                Label {
+                    Text(appModel.statusMessage)
+                        .fixedSize(horizontal: false, vertical: true)
+                } icon: {
+                    Image(systemName: "scope")
+                }
+                .font(.headline)
+                .foregroundStyle(appModel.playMode == .guided ? .cyan : .primary)
+                .labelStyle(.titleAndIcon)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+
+            VStack(alignment: .leading, spacing: 12) {
+                Picker("Mode", selection: $appModel.playMode) {
+                    ForEach(PlayMode.allCases) { mode in
+                        Text(mode.title).tag(mode)
+                    }
+                }
+                .pickerStyle(.segmented)
+                .labelsHidden()
+                .frame(maxWidth: .infinity)
+                .onChange(of: appModel.playMode) { _, newValue in
+                    appModel.setPlayMode(newValue)
+                }
+
+                HStack(spacing: 12) {
+                    Button(
+                        appModel.isAutoPlaying ? "Stop" : "Play",
+                        systemImage: appModel.isAutoPlaying ? "stop.fill" : "play.fill"
+                    ) {
+                        appModel.toggleAutoPlay()
+                    }
+                    .buttonStyle(.bordered)
+                    .disabled(appModel.isComplete && !appModel.isAutoPlaying)
+                    .accessibilityLabel(appModel.isAutoPlaying ? "Stop autoplay" : "Play remaining heaps")
+
+                    Button("Reset", systemImage: "arrow.counterclockwise") {
+                        appModel.resetMandala()
+                    }
+                    .buttonStyle(.bordered)
+
+                    Spacer(minLength: 0)
+
+                    Button("Exit", systemImage: "xmark.circle.fill") {
+                        appModel.exitMandala()
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .buttonBorderShape(.capsule)
                 }
             }
-            .pickerStyle(.segmented)
-            .frame(width: 160)
-            .onChange(of: appModel.playMode) { _, newValue in
-                appModel.setPlayMode(newValue)
-            }
-
-            Button("Reset", systemImage: "arrow.counterclockwise") {
-                appModel.resetMandala()
-            }
-            .buttonStyle(.bordered)
-
-            Button("Exit", systemImage: "xmark.circle.fill") {
-                appModel.exitMandala()
-            }
-            .buttonStyle(.borderedProminent)
-            .buttonBorderShape(.capsule)
         }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 10)
-        .background(.ultraThinMaterial, in: Capsule())
+        .padding(.horizontal, 20)
+        .padding(.vertical, 16)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
     }
 }

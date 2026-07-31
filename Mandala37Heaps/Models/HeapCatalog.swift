@@ -3,14 +3,18 @@ import RealityKit
 import UIKit
 
 /// Physical offering-set tier matching the traditional stacked-ring mandala.
+///
+/// Angle convention (local XZ, `x = r·cosθ`, `z = r·sinθ`):
+/// East = bottom of the reference diagram = toward viewer (+Z) = **90°**.
+/// Right = +X = 0°, Left = −X = 180°, Top (away) = −Z = 270°.
 enum MandalaTier: Int, CaseIterable, Identifiable {
-    /// Base plate + largest ring: Meru, continents, subcontinents (heaps 1–13).
+    /// Base plate + largest ring: Meru, continents, subcontinents, four treasures (heaps 1–17).
     case universe = 0
-    /// Second ring: continental treasures + seven royal emblems + vase (14–25).
+    /// Second ring: seven royal emblems + vase (18–25).
     case treasures = 1
     /// Third ring: eight offering goddesses (26–33).
     case goddesses = 2
-    /// Upper section: sun, moon, parasol, victory banner (34–37).
+    /// Upper section: sun, moon, parasol, victory banner (34–37); centerpiece last.
     case celestial = 3
 
     var id: Int { rawValue }
@@ -18,8 +22,8 @@ enum MandalaTier: Int, CaseIterable, Identifiable {
     /// Inclusive 1-based heap numbers on this tier.
     var heapNumbers: ClosedRange<Int> {
         switch self {
-        case .universe: return 1...13
-        case .treasures: return 14...25
+        case .universe: return 1...17
+        case .treasures: return 18...25
         case .goddesses: return 26...33
         case .celestial: return 34...37
         }
@@ -46,15 +50,20 @@ enum MandalaTier: Int, CaseIterable, Identifiable {
     /// Outer radius of this tier's metal ring.
     var ringRadius: Float {
         switch self {
-        case .universe: return 0.48
+        case .universe: return 0.52
         case .treasures: return 0.34
         case .goddesses: return 0.24
         case .celestial: return 0.15
         }
     }
 
-    /// Usable inner deck radius for placing heaps.
-    var deckRadius: Float { ringRadius * 0.82 }
+    /// Usable inner deck radius for placing heaps (base ring uses more of the plate).
+    var deckRadius: Float {
+        switch self {
+        case .universe: return ringRadius * 0.90
+        default: return ringRadius * 0.82
+        }
+    }
 
     /// Local Y of the fill surface relative to the mandala root (plate top ≈ 0.034).
     var surfaceY: Float {
@@ -74,6 +83,7 @@ enum MandalaTier: Int, CaseIterable, Identifiable {
 }
 
 /// Traditional Tibetan 37-heap mandala offering definitions and tiered layout.
+/// Layout matches the four-ring reference diagram (east = bottom / toward viewer).
 struct HeapDefinition {
     let number: Int
     let name: String
@@ -88,93 +98,105 @@ struct HeapDefinition {
     static let all: [HeapDefinition] = {
         var items: [HeapDefinition] = []
 
-        // —— Tier 0: Mount Meru, continents, subcontinents ——
-            items.append(HeapDefinition(
-                number: 1, name: "Mount Meru", preferredMaterial: .gold,
-                tier: .universe, radiusFraction: 0, angleDegrees: 0, heapScale: 1.75
-            ))
+        // —— Tier 0 / first ring: Meru, continents, subcontinents, four treasures (1–17) ——
+        items.append(HeapDefinition(
+            number: 1, name: "Mount Meru", preferredMaterial: .gold,
+            tier: .universe, radiusFraction: 0, angleDegrees: 0, heapScale: 1.55
+        ))
 
+        // Outer rim continents — East at bottom (90°).
         let continents: [(String, HeapMaterialKind, Float)] = [
-            ("Eastern Continent (Pūrvavideha)", .turquoise, 0),
-            ("Southern Continent (Jambudvīpa)", .coral, 90),
-            ("Western Continent (Aparagodānīya)", .pearl, 180),
-            ("Northern Continent (Uttarakuru)", .jade, 270)
+            ("Eastern Continent (Pūrvavideha)", .turquoise, 90),   // 2 bottom
+            ("Southern Continent (Jambudvīpa)", .coral, 180),      // 3 left
+            ("Western Continent (Aparagodānīya)", .pearl, 270),    // 4 top
+            ("Northern Continent (Uttarakuru)", .jade, 0)          // 5 right
         ]
         for (i, c) in continents.enumerated() {
             items.append(HeapDefinition(
                 number: 2 + i, name: c.0, preferredMaterial: c.1,
-                tier: .universe, radiusFraction: 0.42, angleDegrees: c.2, heapScale: 1.05
+                tier: .universe, radiusFraction: 0.62, angleDegrees: c.2, heapScale: 0.95
             ))
         }
 
-        let subOffsets: [Float] = [-22, 22, 68, 112, 158, 202, 248, 292]
-        let subNames = [
-            "East Subcontinent A", "East Subcontinent B",
-            "South Subcontinent A", "South Subcontinent B",
-            "West Subcontinent A", "West Subcontinent B",
-            "North Subcontinent A", "North Subcontinent B"
+        // Subcontinents flanking each continent (outer rim).
+        // East(2): left 6 / right 7; Left(3): above 8 / below 9;
+        // Top(4): left 11 / right 10; Right(5): above 13 / below 12.
+        let subs: [(String, Float)] = [
+            ("East Subcontinent A", 112),   // 6 left flank of east
+            ("East Subcontinent B", 68),    // 7 right flank of east
+            ("South Subcontinent A", 202),  // 8 above left continent
+            ("South Subcontinent B", 158),  // 9 below left continent
+            ("West Subcontinent A", 292),   // 10 right flank of top
+            ("West Subcontinent B", 248),   // 11 left flank of top
+            ("North Subcontinent A", 22),   // 12 below right continent
+            ("North Subcontinent B", 338)   // 13 above right continent
         ]
-        for (i, angle) in subOffsets.enumerated() {
+        for (i, s) in subs.enumerated() {
             items.append(HeapDefinition(
-                number: 6 + i, name: subNames[i], preferredMaterial: .grain,
-                tier: .universe, radiusFraction: 0.72, angleDegrees: angle, heapScale: 0.78
+                number: 6 + i, name: s.0, preferredMaterial: .grain,
+                tier: .universe, radiusFraction: 0.90, angleDegrees: s.1, heapScale: 0.68
             ))
         }
 
-        // —— Tier 1: treasures + royal emblems + vase ——
-        let treasures: [(String, HeapMaterialKind, Float)] = [
-            ("Jewel Mountain", .gold, 0),
-            ("Wish-Fulfilling Tree", .jade, 90),
-            ("Wish-Fulfilling Cow", .pearl, 180),
-            ("Harvest That Needs No Cultivation", .grain, 270)
+        // Inner cross between Meru and outer rim (still on base ring).
+        let innerCross: [(String, HeapMaterialKind, Float)] = [
+            ("Jewel Mountain", .gold, 90),                 // 14 bottom (east)
+            ("Wish-Fulfilling Tree", .jade, 180),          // 15 left
+            ("Wish-Fulfilling Cow", .pearl, 270),          // 16 top
+            ("Harvest That Needs No Cultivation", .grain, 0) // 17 right
         ]
-        for (i, t) in treasures.enumerated() {
+        for (i, t) in innerCross.enumerated() {
             items.append(HeapDefinition(
                 number: 14 + i, name: t.0, preferredMaterial: t.1,
-                tier: .treasures, radiusFraction: 0.38, angleDegrees: t.2, heapScale: 0.92
+                tier: .universe, radiusFraction: 0.32, angleDegrees: t.2, heapScale: 0.82
             ))
         }
 
-        let emblems: [(String, HeapMaterialKind)] = [
-            ("Precious Wheel", .gold),
-            ("Precious Jewel", .turquoise),
-            ("Precious Queen", .coral),
-            ("Precious Minister", .pearl),
-            ("Precious Elephant", .jade),
-            ("Precious Horse", .grain),
-            ("Precious General", .gold),
-            ("Great Treasure Vase", .turquoise)
+        // —— Tier 1 / second ring: royal emblems + vase (18–25) ——
+        let emblems: [(String, HeapMaterialKind, Float)] = [
+            ("Precious Wheel", .gold, 90),        // 18 bottom
+            ("Precious Jewel", .turquoise, 180),  // 19 left
+            ("Precious Queen", .coral, 270),      // 20 top
+            ("Precious Minister", .pearl, 0),     // 21 right
+            ("Precious Elephant", .jade, 135),    // 22 BL
+            ("Precious Horse", .grain, 225),      // 23 TL
+            ("Precious General", .gold, 315),     // 24 TR
+            ("Great Treasure Vase", .turquoise, 45) // 25 BR
         ]
         for (i, e) in emblems.enumerated() {
-            let angle = Float(i) * 45 + 22.5
             items.append(HeapDefinition(
                 number: 18 + i, name: e.0, preferredMaterial: e.1,
-                tier: .treasures, radiusFraction: 0.72, angleDegrees: angle, heapScale: 0.74
+                tier: .treasures, radiusFraction: 0.70, angleDegrees: e.2, heapScale: 0.74
             ))
         }
 
-        // —— Tier 2: eight offering goddesses ——
-        let goddesses = [
-            "Goddess of Beauty", "Goddess of Garlands", "Goddess of Song", "Goddess of Dance",
-            "Goddess of Flowers", "Goddess of Incense", "Goddess of Light", "Goddess of Perfume"
+        // —— Tier 2 / third ring: eight offering goddesses (26–33) ——
+        let goddesses: [(String, HeapMaterialKind, Float)] = [
+            ("Goddess of Beauty", .coral, 90),       // 26 bottom
+            ("Goddess of Garlands", .pearl, 180),    // 27 left
+            ("Goddess of Song", .turquoise, 270),    // 28 top
+            ("Goddess of Dance", .jade, 0),          // 29 right
+            ("Goddess of Flowers", .coral, 135),     // 30 BL
+            ("Goddess of Incense", .grain, 225),     // 31 TL
+            ("Goddess of Light", .gold, 315),        // 32 TR
+            ("Goddess of Perfume", .pearl, 45)       // 33 BR
         ]
-        let goddessMats: [HeapMaterialKind] = [.coral, .pearl, .turquoise, .jade, .coral, .grain, .gold, .pearl]
-        for (i, name) in goddesses.enumerated() {
-            let angle = Float(i) * 45
+        for (i, g) in goddesses.enumerated() {
             items.append(HeapDefinition(
-                number: 26 + i, name: name, preferredMaterial: goddessMats[i],
-                tier: .goddesses, radiusFraction: 0.62, angleDegrees: angle, heapScale: 0.68
+                number: 26 + i, name: g.0, preferredMaterial: g.1,
+                tier: .goddesses, radiusFraction: 0.68, angleDegrees: g.2, heapScale: 0.68
             ))
         }
 
-        // —— Tier 3: sun, moon, parasol, victory banner ——
-        let outer: [(String, HeapMaterialKind, Float)] = [
-            ("Sun", .gold, 45),
-            ("Moon", .pearl, 225),
-            ("Precious Parasol", .turquoise, 135),
-            ("Victory Banner", .coral, 315)
+        // —— Tier 3 / top ring: sun, moon, parasol, victory banner (34–37) ——
+        // Centerpiece (38) is placed last in AppModel after all 37 heaps.
+        let celestial: [(String, HeapMaterialKind, Float)] = [
+            ("Sun", .gold, 180),                 // 34 left
+            ("Moon", .pearl, 0),                 // 35 right
+            ("Precious Parasol", .turquoise, 270), // 36 top
+            ("Victory Banner", .coral, 90)       // 37 bottom (east)
         ]
-        for (i, o) in outer.enumerated() {
+        for (i, o) in celestial.enumerated() {
             items.append(HeapDefinition(
                 number: 34 + i, name: o.0, preferredMaterial: o.1,
                 tier: .celestial, radiusFraction: 0.68, angleDegrees: o.2, heapScale: 0.75
@@ -182,6 +204,8 @@ struct HeapDefinition {
         }
 
         precondition(items.count == 37)
+        // Offering order must stay 1…37 by number.
+        precondition(items.map(\.number) == Array(1...37))
         return items
     }()
 

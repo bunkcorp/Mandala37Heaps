@@ -22,9 +22,6 @@ struct ImmersiveView: View {
                     appModel.handleTap(on: value.entity)
                 }
         )
-        .ornament(attachmentAnchor: .scene(.bottom)) {
-            ImmersiveControlsView()
-        }
 #if DEBUG
         .task {
             guard !appModel.didRunDebugGameplay else { return }
