@@ -13,7 +13,9 @@ final class GrainAudio {
     private var settleBuffer: AVAudioPCMBuffer?
     private var ringBuffer: AVAudioPCMBuffer?
     private var isReady = false
+    private var isEnabled = true
     private var lastPourTime: TimeInterval = 0
+    private var lastSettleTime: TimeInterval = 0
 
     func prepare() {
         guard !isReady else { return }
@@ -49,7 +51,26 @@ final class GrainAudio {
         isReady = true
     }
 
+    /// Mute and flush scheduled grain buffers (e.g. after mandala completion).
+    func stopAll() {
+        isEnabled = false
+        pourNode.stop()
+        thudNode.stop()
+        engine.mainMixerNode.outputVolume = 0
+    }
+
+    func resume() {
+        isEnabled = true
+        if isReady {
+            engine.mainMixerNode.outputVolume = 0.85
+            try? engine.start()
+        } else {
+            prepare()
+        }
+    }
+
     func playPour(intensity: Float = 1) {
+        guard isEnabled else { return }
         prepare()
         let now = ProcessInfo.processInfo.systemUptime
         guard now - lastPourTime > 0.12 else { return }
@@ -62,15 +83,20 @@ final class GrainAudio {
     }
 
     func playSettle(intensity: Float = 0.7) {
+        guard isEnabled else { return }
         prepare()
+        let now = ProcessInfo.processInfo.systemUptime
+        // Avoid stacking settle buffers into a continuous hiss.
+        guard now - lastSettleTime > 0.35 else { return }
+        lastSettleTime = now
         guard let settleBuffer else { return }
-        // Layer settle on the pour node at lower volume if pour is busy.
         pourNode.volume = min(1, max(0.15, intensity * 0.6))
         pourNode.scheduleBuffer(settleBuffer, at: nil, options: [], completionHandler: nil)
         if !pourNode.isPlaying { pourNode.play() }
     }
 
     func playRingPress() {
+        guard isEnabled else { return }
         prepare()
         guard let ringBuffer else { return }
         thudNode.stop()

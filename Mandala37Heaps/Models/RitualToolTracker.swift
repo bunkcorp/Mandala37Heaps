@@ -4,12 +4,15 @@ import RealityKit
 import simd
 import UIKit
 
-/// Tracks a ritual scoop: right index tip when hands are available, else a draggable tool.
+/// Tracks a ritual scoop: right-hand phalanx capsules when available, else a draggable tool.
 @MainActor
 final class RitualToolTracker {
     private(set) var toolEntity = Entity()
     private(set) var localPositionInMandala: SIMD3<Float>?
     private(set) var isTrackingHand = false
+
+    /// Latest mandala-local contact capsules (scoop or finger phalanges).
+    private(set) var mandalaCapsules: [MPMCapsuleSDF] = []
 
     private let session = ARKitSession()
     private let handTracking = HandTrackingProvider()
@@ -52,6 +55,7 @@ final class RitualToolTracker {
         if toolEntity.parent !== mandalaRoot {
             mandalaRoot.addChild(toolEntity)
         }
+        refreshScoopCapsule()
     }
 
     func startHandTracking() {
@@ -59,6 +63,7 @@ final class RitualToolTracker {
         handTask = Task { @MainActor in
             guard HandTrackingProvider.isSupported else {
                 isTrackingHand = false
+                refreshScoopCapsule()
                 return
             }
             do {
@@ -68,8 +73,10 @@ final class RitualToolTracker {
                     guard !Task.isCancelled else { return }
                     guard update.anchor.chirality == .right,
                           let skeleton = update.anchor.handSkeleton else { continue }
+                    guard let root = mandalaRoot else { continue }
+
                     let tip = skeleton.joint(.indexFingerTip)
-                    guard tip.isTracked, let root = mandalaRoot else { continue }
+                    guard tip.isTracked else { continue }
 
                     let jointToWorld = update.anchor.originFromAnchorTransform
                         * tip.anchorFromJointTransform
@@ -81,9 +88,16 @@ final class RitualToolTracker {
                     let local = root.convert(position: worldPos, from: nil)
                     toolEntity.position = local
                     localPositionInMandala = local
+
+                    mandalaCapsules = Self.phalanxCapsules(
+                        skeleton: skeleton,
+                        anchor: update.anchor,
+                        mandalaRoot: root
+                    )
                 }
             } catch {
                 isTrackingHand = false
+                refreshScoopCapsule()
                 print("[RitualTool] hand tracking unavailable: \(error)")
             }
         }
@@ -99,6 +113,7 @@ final class RitualToolTracker {
     func updateDraggedPosition(_ local: SIMD3<Float>) {
         toolEntity.position = local
         localPositionInMandala = local
+        refreshScoopCapsule()
     }
 
     /// Tool position in a tier's local space, if the tool is near that tier's deck.
@@ -107,8 +122,76 @@ final class RitualToolTracker {
             return nil
         }
         guard let root = mandalaRoot else { return nil }
-        // Convert mandala-local tool → tier-local.
         let world = root.convert(position: local, to: nil)
         return tierEntity.convert(position: world, from: nil)
+    }
+
+    /// Phalanx / scoop capsules expressed in a tier's local space for MPM SDF contact.
+    func contactCapsules(in tierEntity: Entity) -> [MPMCapsuleSDF] {
+        guard let root = mandalaRoot else { return [] }
+        let source = mandalaCapsules.isEmpty ? [scoopCapsuleMandala()] : mandalaCapsules
+        return source.map { capsule in
+            let p0World = root.convert(position: capsule.p0, to: nil)
+            let p1World = root.convert(position: capsule.p1, to: nil)
+            return MPMCapsuleSDF(
+                p0: tierEntity.convert(position: p0World, from: nil),
+                p1: tierEntity.convert(position: p1World, from: nil),
+                radius: capsule.radius
+            )
+        }
+    }
+
+    // MARK: - Capsules
+
+    private func refreshScoopCapsule() {
+        mandalaCapsules = [scoopCapsuleMandala()]
+    }
+
+    private func scoopCapsuleMandala() -> MPMCapsuleSDF {
+        let p = localPositionInMandala ?? toolEntity.position
+        return MPMCapsuleSDF(
+            p0: p + SIMD3(0, -0.008, 0),
+            p1: p + SIMD3(0, 0.012, 0),
+            radius: 0.022
+        )
+    }
+
+    private static func phalanxCapsules(
+        skeleton: HandSkeleton,
+        anchor: HandAnchor,
+        mandalaRoot: Entity
+    ) -> [MPMCapsuleSDF] {
+        let chains: [(HandSkeleton.JointName, HandSkeleton.JointName, Float)] = [
+            (.indexFingerKnuckle, .indexFingerIntermediateBase, 0.012),
+            (.indexFingerIntermediateBase, .indexFingerIntermediateTip, 0.011),
+            (.indexFingerIntermediateTip, .indexFingerTip, 0.010),
+            (.middleFingerIntermediateTip, .middleFingerTip, 0.010),
+            (.thumbIntermediateTip, .thumbTip, 0.012)
+        ]
+
+        var capsules: [MPMCapsuleSDF] = []
+        for (a, b, radius) in chains {
+            let ja = skeleton.joint(a)
+            let jb = skeleton.joint(b)
+            guard ja.isTracked, jb.isTracked else { continue }
+            let wa = worldPosition(joint: ja, anchor: anchor)
+            let wb = worldPosition(joint: jb, anchor: anchor)
+            capsules.append(
+                MPMCapsuleSDF(
+                    p0: mandalaRoot.convert(position: wa, from: nil),
+                    p1: mandalaRoot.convert(position: wb, from: nil),
+                    radius: radius
+                )
+            )
+        }
+        return capsules
+    }
+
+    private static func worldPosition(
+        joint: HandSkeleton.Joint,
+        anchor: HandAnchor
+    ) -> SIMD3<Float> {
+        let t = anchor.originFromAnchorTransform * joint.anchorFromJointTransform
+        return SIMD3(t.columns.3.x, t.columns.3.y, t.columns.3.z)
     }
 }

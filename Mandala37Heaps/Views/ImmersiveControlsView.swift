@@ -38,6 +38,92 @@ struct ImmersiveControlsView: View {
                     appModel.setPlayMode(newValue)
                 }
 
+                Picker("Solver", selection: $appModel.solverMode) {
+                    ForEach(SolverMode.allCases) { mode in
+                        Text(mode.title).tag(mode)
+                    }
+                }
+                .pickerStyle(.segmented)
+                .labelsHidden()
+                .frame(maxWidth: .infinity)
+                .onChange(of: appModel.solverMode) { _, newValue in
+                    appModel.setSolverMode(newValue)
+                }
+
+                if appModel.showDiagnosticsHUD {
+                    Text(appModel.diagnosticsHUD)
+                        .font(.caption2.monospaced())
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                    Text(appModel.identificationHUD)
+                        .font(.caption2.monospaced())
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                    Text(appModel.posteriorHUD)
+                        .font(.caption2.monospaced())
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                    Text(appModel.surfaceUncertaintyHUD)
+                        .font(.caption2.monospaced())
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                    Text(appModel.adaptivityHUD)
+                        .font(.caption2.monospaced())
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                    Text(appModel.neuralResidualHUD)
+                        .font(.caption2.monospaced())
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+
+                if appModel.solverMode == .mpmActive {
+                    HStack(spacing: 10) {
+                        Button(appModel.isIdentifying ? "Stop ID" : "Fit ID") {
+                            appModel.setIdentifying(!appModel.isIdentifying)
+                        }
+                        .buttonStyle(.bordered)
+                        .disabled(appModel.solverMode != .mpmActive)
+
+                        Button("Target") {
+                            appModel.captureIdentificationTarget()
+                        }
+                        .buttonStyle(.bordered)
+
+                        Button("Teacher") {
+                            appModel.captureSyntheticTeacherTarget()
+                        }
+                        .buttonStyle(.bordered)
+
+                        Button(appModel.showUncertaintyBands ? "Hide σ" : "Show σ") {
+                            appModel.setUncertaintyBandsVisible(!appModel.showUncertaintyBands)
+                        }
+                        .buttonStyle(.bordered)
+                    }
+
+                    HStack(spacing: 10) {
+                        Button(appModel.isAdaptivityEnabled ? "Adapt Off" : "Adapt On") {
+                            appModel.setAdaptivityEnabled(!appModel.isAdaptivityEnabled)
+                        }
+                        .buttonStyle(.bordered)
+
+                        Button(appModel.showAdaptivityHeatmap ? "Hide e" : "Show e") {
+                            appModel.setAdaptivityHeatmapVisible(!appModel.showAdaptivityHeatmap)
+                        }
+                        .buttonStyle(.bordered)
+
+                        Button(appModel.isNeuralResidualEnabled ? "Neural Off" : "Neural On") {
+                            appModel.setNeuralResidualEnabled(!appModel.isNeuralResidualEnabled)
+                        }
+                        .buttonStyle(.bordered)
+
+                        Button(appModel.showNeuralResidualSurface ? "Hide δh" : "Show δh") {
+                            appModel.setNeuralResidualSurfaceVisible(!appModel.showNeuralResidualSurface)
+                        }
+                        .buttonStyle(.bordered)
+                    }
+                }
+
                 HStack(spacing: 12) {
                     Button(
                         appModel.isAutoPlaying ? "Stop" : "Play",

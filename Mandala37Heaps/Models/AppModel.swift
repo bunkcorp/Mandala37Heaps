@@ -30,6 +30,26 @@ final class AppModel {
     var isAutoPlaying = false
     var didProcessDebugLaunchArguments = false
     var didRunDebugGameplay = false
+    /// Dual-solver: DEM baseline (default) or MPM active-region continuum.
+    var solverMode: SolverMode = .dem
+    /// Latest conservation / contact diagnostics (MPM path).
+    var diagnosticsHUD: String = "Solver: DEM"
+    var showDiagnosticsHUD: Bool = true
+    /// Phase 2 online constitutive identification (FD Adam).
+    var isIdentifying: Bool = false
+    var identificationHUD: String = "ID idle"
+    /// Phase 3 Bayesian posterior + surface uncertainty bands.
+    var showUncertaintyBands: Bool = false
+    var posteriorHUD: String = "Post idle"
+    var surfaceUncertaintyHUD: String = "Surf σ idle"
+    /// Phase 4 adaptive multiresolution.
+    var isAdaptivityEnabled: Bool = false
+    var showAdaptivityHeatmap: Bool = false
+    var adaptivityHUD: String = "Adapt idle"
+    /// Phase 5 physics-constrained neural residual.
+    var isNeuralResidualEnabled: Bool = false
+    var showNeuralResidualSurface: Bool = false
+    var neuralResidualHUD: String = "Neural residual idle"
 
     let mandalaRoot = Entity()
 
@@ -46,6 +66,16 @@ final class AppModel {
     private var autoPlayTask: Task<Void, Never>?
     private var grainSimTask: Task<Void, Never>?
     private var grainSims: [MandalaTier: GrainGPUSimulator] = [:]
+    private var mpmSims: [MandalaTier: MPMSimulator] = [:]
+    private let parameterIdentifier = ParameterIdentifier()
+    private let parameterPosterior = ParameterPosterior()
+    private var surfaceUncertainty: SurfaceUncertaintyEngine?
+    private var uncertaintyVisualizers: [MandalaTier: UncertaintyBandVisualizer] = [:]
+    private var uncertaintyFrameCounter: Int = 0
+    private let adaptivityController = AdaptiveResolutionController()
+    private var adaptivityVisualizers: [MandalaTier: AdaptivityVisualizer] = [:]
+    private let neuralResidual = PhysicsConstrainedResidualCorrector()
+    private var neuralVisualizers: [MandalaTier: ResidualSurfaceVisualizer] = [:]
     let ritualTool = RitualToolTracker()
 
     var nextGuidedIndex: Int? {
@@ -77,7 +107,7 @@ final class AppModel {
         startGrainSimulationLoop()
     }
 
-    /// Per-frame Metal grain integrate / deposit / height-field relax.
+    /// Per-frame Metal grain integrate / deposit / height-field relax (and optional MPM).
     func startGrainSimulationLoop() {
         grainSimTask?.cancel()
         grainSimTask = Task { @MainActor in
@@ -89,15 +119,383 @@ final class AppModel {
                 let step = min(max(dt, 1 / 240), 1 / 30)
                 for tier in MandalaTier.allCases {
                     guard tier.rawValue <= unlockedTier.rawValue else { continue }
-                    if let tierRoot = tierRoots[tier],
-                       let toolLocal = ritualTool.toolPosition(in: tierRoot) {
-                        grainSims[tier]?.disturbWithTool(at: toolLocal)
+                    if let tierRoot = tierRoots[tier] {
+                        let capsules = ritualTool.contactCapsules(in: tierRoot)
+                        if solverMode == .mpmActive {
+                            mpmSims[tier]?.setContactCapsules(capsules)
+                        }
+                        if let toolLocal = ritualTool.toolPosition(in: tierRoot) {
+                            grainSims[tier]?.disturbWithTool(at: toolLocal)
+                        }
                     }
-                    grainSims[tier]?.step(dt: step)
+                    switch solverMode {
+                    case .dem:
+                        grainSims[tier]?.step(dt: step)
+                    case .mpmActive:
+                        // DEM height field stays as bulk backdrop; MPM owns active pour/contact.
+                        mpmSims[tier]?.step(dt: step)
+                        grainSims[tier]?.step(dt: step)
+                        if tier == unlockedTier,
+                           let live = mpmSims[tier],
+                           let tierRoot = tierRoots[tier] {
+                            let capsules = ritualTool.contactCapsules(in: tierRoot)
+                            // Recover if a previous ID step poisoned constitutive params.
+                            if !live.constitutive.isFinite {
+                                live.setConstitutive(.defaultRice)
+                                parameterIdentifier.seedParams(.defaultRice)
+                                parameterPosterior.reset(to: .defaultRice)
+                            }
+                            if isIdentifying {
+                                let tick = parameterIdentifier.tick(live: live, capsules: capsules)
+                                if tick.didUpdate, tick.params.isFinite, tick.loss.isFinite {
+                                    parameterPosterior.observe(
+                                        params: tick.params,
+                                        gradients: tick.gradients,
+                                        loss: tick.loss
+                                    )
+                                    maybeUpdateSurfaceUncertainty(
+                                        live: live,
+                                        capsules: capsules,
+                                        checkpoint: tick.checkpoint
+                                    )
+                                }
+                            } else if showUncertaintyBands {
+                                maybeUpdateSurfaceUncertainty(
+                                    live: live,
+                                    capsules: capsules,
+                                    checkpoint: nil
+                                )
+                            }
+                            if isAdaptivityEnabled || showAdaptivityHeatmap {
+                                let stats = adaptivityController.tick(
+                                    sim: live,
+                                    capsules: capsules,
+                                    applyAdaptation: isAdaptivityEnabled
+                                )
+                                if showAdaptivityHeatmap {
+                                    ensureAdaptivityVisualizer(for: tier)
+                                    adaptivityVisualizers[tier]?.update(with: stats.field)
+                                    adaptivityVisualizers[tier]?.setEnabled(true)
+                                }
+                                adaptivityHUD = stats.hudLine
+                            }
+                            if isNeuralResidualEnabled || showNeuralResidualSurface {
+                                let demH = grainSims[tier]?.sampleHeightFieldMeters()
+                                let nStats = neuralResidual.tick(
+                                    mpm: live,
+                                    demHeights: demH,
+                                    params: live.constitutive,
+                                    fillRadius: tier.fillRadius,
+                                    maxHeight: tier.ringHeight
+                                )
+                                neuralResidualHUD = nStats.hudLine
+                                if showNeuralResidualSurface {
+                                    ensureNeuralVisualizer(for: tier)
+                                    neuralVisualizers[tier]?.update(
+                                        heights: neuralResidual.correctedHeights,
+                                        resolution: PhysicsConstrainedResidualCorrector.resolution,
+                                        fillRadius: tier.fillRadius
+                                    )
+                                    neuralVisualizers[tier]?.setEnabled(true)
+                                }
+                            }
+                        }
+                    }
                 }
+                refreshDiagnosticsHUD()
                 try? await Task.sleep(for: .milliseconds(16))
             }
         }
+    }
+
+    func setSolverMode(_ mode: SolverMode) {
+        solverMode = mode
+        for tier in MandalaTier.allCases {
+            mpmSims[tier]?.setEnabled(mode == .mpmActive)
+        }
+        if mode != .mpmActive {
+            if isIdentifying { setIdentifying(false) }
+            if isAdaptivityEnabled { setAdaptivityEnabled(false) }
+            if showAdaptivityHeatmap { setAdaptivityHeatmapVisible(false) }
+            if isNeuralResidualEnabled { setNeuralResidualEnabled(false) }
+            if showNeuralResidualSurface { setNeuralResidualSurfaceVisible(false) }
+        }
+        refreshDiagnosticsHUD()
+        statusMessage = mode == .mpmActive
+            ? "MPM active region · continuum sand core"
+            : "DEM + height field · interactive baseline"
+    }
+
+    func setAdaptivityEnabled(_ enabled: Bool) {
+        guard solverMode == .mpmActive || !enabled else {
+            statusMessage = "Switch to MPM before enabling adaptivity"
+            return
+        }
+        isAdaptivityEnabled = enabled
+        adaptivityController.enabled = enabled
+        if enabled {
+            ensureAdaptivityVisualizer(for: unlockedTier)
+        }
+        statusMessage = enabled
+            ? "Adaptivity on · refine contact / coarsen bulk"
+            : "Adaptivity off"
+        refreshDiagnosticsHUD()
+    }
+
+    func setAdaptivityHeatmapVisible(_ visible: Bool) {
+        showAdaptivityHeatmap = visible
+        ensureAdaptivityVisualizer(for: unlockedTier)
+        for (tier, viz) in adaptivityVisualizers {
+            viz.setEnabled(visible && tier.rawValue <= unlockedTier.rawValue)
+        }
+        if visible, let live = mpmSims[unlockedTier], let tierRoot = tierRoots[unlockedTier] {
+            let capsules = ritualTool.contactCapsules(in: tierRoot)
+            let stats = adaptivityController.tick(
+                sim: live,
+                capsules: capsules,
+                applyAdaptation: false
+            )
+            adaptivityVisualizers[unlockedTier]?.update(with: stats.field)
+            adaptivityHUD = stats.hudLine
+        }
+        statusMessage = visible ? "Adaptivity heatmap shown" : "Adaptivity heatmap hidden"
+        refreshDiagnosticsHUD()
+    }
+
+    private func ensureAdaptivityVisualizer(for tier: MandalaTier) {
+        guard let tierRoot = tierRoots[tier] else { return }
+        if adaptivityVisualizers[tier] == nil {
+            let viz = AdaptivityVisualizer()
+            viz.attach(to: tierRoot)
+            adaptivityVisualizers[tier] = viz
+        }
+    }
+
+    func setNeuralResidualEnabled(_ enabled: Bool) {
+        guard solverMode == .mpmActive || !enabled else {
+            statusMessage = "Switch to MPM before enabling neural residual"
+            return
+        }
+        isNeuralResidualEnabled = enabled
+        neuralResidual.enabled = enabled
+        neuralResidual.isTraining = enabled
+        if enabled {
+            ensureNeuralVisualizer(for: unlockedTier)
+        }
+        statusMessage = enabled
+            ? "Neural residual on · physics-constrained δh"
+            : "Neural residual off"
+        refreshDiagnosticsHUD()
+    }
+
+    func setNeuralResidualSurfaceVisible(_ visible: Bool) {
+        showNeuralResidualSurface = visible
+        ensureNeuralVisualizer(for: unlockedTier)
+        for (tier, viz) in neuralVisualizers {
+            viz.setEnabled(visible && tier.rawValue <= unlockedTier.rawValue)
+        }
+        statusMessage = visible ? "Neural corrected surface shown" : "Neural surface hidden"
+        refreshDiagnosticsHUD()
+    }
+
+    private func ensureNeuralVisualizer(for tier: MandalaTier) {
+        guard let tierRoot = tierRoots[tier] else { return }
+        if neuralVisualizers[tier] == nil {
+            let viz = ResidualSurfaceVisualizer()
+            viz.attach(to: tierRoot)
+            neuralVisualizers[tier] = viz
+        }
+    }
+
+    func setIdentifying(_ enabled: Bool) {
+        guard solverMode == .mpmActive || !enabled else {
+            statusMessage = "Switch to MPM before running identification"
+            return
+        }
+        isIdentifying = enabled
+        parameterIdentifier.prepare(tier: unlockedTier)
+        ensureBayesianEngines()
+        if enabled {
+            // Start from a deliberately wrong guess so FD fit has work to do.
+            var guess = ConstitutiveParams.defaultRice
+            guess.phiDegrees = 28
+            guess.youngsModulus = 2.2e5
+            for sim in mpmSims.values {
+                sim.setConstitutive(guess)
+            }
+            parameterIdentifier.seedParams(guess)
+            parameterPosterior.reset(to: guess)
+        }
+        parameterIdentifier.setRunning(enabled)
+        identificationHUD = parameterIdentifier.status.hudLine
+        statusMessage = enabled
+            ? "Identifying φ, E via FD sensitivity"
+            : "Identification paused"
+        refreshDiagnosticsHUD()
+    }
+
+    func setUncertaintyBandsVisible(_ visible: Bool) {
+        showUncertaintyBands = visible
+        ensureBayesianEngines()
+        for (tier, viz) in uncertaintyVisualizers {
+            viz.setEnabled(visible && tier.rawValue <= unlockedTier.rawValue)
+        }
+        if visible, let live = mpmSims[unlockedTier], let tierRoot = tierRoots[unlockedTier] {
+            let capsules = ritualTool.contactCapsules(in: tierRoot)
+            maybeUpdateSurfaceUncertainty(
+                live: live,
+                capsules: capsules,
+                checkpoint: live.captureParticleCheckpoint(),
+                force: true
+            )
+        }
+        statusMessage = visible
+            ? "Uncertainty bands · mean ± σ surface"
+            : "Uncertainty bands hidden"
+        refreshDiagnosticsHUD()
+    }
+
+    private func ensureBayesianEngines() {
+        if surfaceUncertainty == nil {
+            surfaceUncertainty = SurfaceUncertaintyEngine(tier: unlockedTier)
+        }
+        for tier in MandalaTier.allCases {
+            guard let tierRoot = tierRoots[tier] else { continue }
+            if uncertaintyVisualizers[tier] == nil {
+                let viz = UncertaintyBandVisualizer()
+                viz.attach(to: tierRoot)
+                uncertaintyVisualizers[tier] = viz
+            }
+        }
+    }
+
+    private func maybeUpdateSurfaceUncertainty(
+        live: MPMSimulator,
+        capsules: [MPMCapsuleSDF],
+        checkpoint: Data?,
+        force: Bool = false
+    ) {
+        guard showUncertaintyBands || isIdentifying else { return }
+        uncertaintyFrameCounter += 1
+        guard force || uncertaintyFrameCounter % 3 == 0 else { return }
+        ensureBayesianEngines()
+        guard let engine = surfaceUncertainty,
+              let data = checkpoint ?? Optional(live.captureParticleCheckpoint()) else { return }
+
+        // Keep posterior mean aligned with live constitutive even without new grads.
+        parameterPosterior.setMean(from: live.constitutive)
+        engine.update(
+            checkpoint: data,
+            capsules: capsules,
+            posterior: parameterPosterior.state,
+            fillRadius: unlockedTier.fillRadius
+        )
+        uncertaintyVisualizers[unlockedTier]?.update(with: engine.field)
+        uncertaintyVisualizers[unlockedTier]?.setEnabled(showUncertaintyBands)
+        posteriorHUD = parameterPosterior.state.hudLine
+        surfaceUncertaintyHUD = engine.field.hudLine
+    }
+
+    func captureIdentificationTarget() {
+        parameterIdentifier.prepare(tier: unlockedTier)
+        guard let live = mpmSims[unlockedTier] else {
+            identificationHUD = "ID: no MPM on unlocked tier"
+            return
+        }
+        parameterIdentifier.captureTarget(from: live.sampleObservation())
+        identificationHUD = parameterIdentifier.status.hudLine
+        statusMessage = parameterIdentifier.status.lastMessage
+    }
+
+    func captureSyntheticTeacherTarget() {
+        parameterIdentifier.prepare(tier: unlockedTier)
+        guard let live = mpmSims[unlockedTier],
+              let tierRoot = tierRoots[unlockedTier] else {
+            identificationHUD = "ID: no MPM on unlocked tier"
+            return
+        }
+        let capsules = ritualTool.contactCapsules(in: tierRoot)
+        parameterIdentifier.captureSyntheticTeacherTarget(
+            live: live,
+            capsules: capsules,
+            teacher: .defaultRice
+        )
+        identificationHUD = parameterIdentifier.status.hudLine
+        statusMessage = parameterIdentifier.status.lastMessage
+    }
+
+    /// JSON snapshot for experiment logging (debug / protocol).
+    func exportDiagnosticsSnapshot() -> String {
+        var tiers: [[String: Any]] = []
+        for tier in MandalaTier.allCases {
+            guard let snap = mpmSims[tier]?.latestDiagnostics else { continue }
+            var dict = snap.jsonDictionary()
+            dict["tier"] = tier.shortTitle
+            dict["solver"] = solverMode.rawValue
+            if let obs = mpmSims[tier]?.sampleObservation() {
+                dict["observation"] = obs.jsonDictionary()
+            }
+            tiers.append(dict)
+        }
+        let id = parameterIdentifier.status
+        let payload: [String: Any] = [
+            "solver": solverMode.rawValue,
+            "filledCount": filledCount,
+            "identification": [
+                "running": id.isRunning,
+                "iteration": id.iteration,
+                "loss": id.loss,
+                "gradientNorm": id.gradientNorm,
+                "hasTarget": id.hasTarget,
+                "phi_deg": id.params.phiDegrees,
+                "youngs": id.params.youngsModulus
+            ],
+            "posterior": parameterPosterior.state.jsonDictionary(),
+            "surfaceUncertainty": [
+                "meanSigma": surfaceUncertainty?.field.meanSigma ?? 0,
+                "maxSigma": surfaceUncertainty?.field.maxSigma ?? 0,
+                "ensemble": surfaceUncertainty?.field.sampleCount ?? 0
+            ],
+            "adaptivity": [
+                "enabled": isAdaptivityEnabled,
+                "splitCount": adaptivityController.latest.splitCount,
+                "coarsenedCount": adaptivityController.latest.coarsenedCount,
+                "fineParticles": adaptivityController.latest.fineParticles,
+                "baseParticles": adaptivityController.latest.baseParticles,
+                "coarseParticles": adaptivityController.latest.coarseParticles,
+                "field": adaptivityController.latest.field.jsonDictionary()
+            ],
+            "neuralResidual": neuralResidual.stats.jsonDictionary(),
+            "tiers": tiers
+        ]
+        guard let data = try? JSONSerialization.data(withJSONObject: payload, options: [.prettyPrinted]),
+              let text = String(data: data, encoding: .utf8) else {
+            return "{}"
+        }
+        return text
+    }
+
+    private func refreshDiagnosticsHUD() {
+        guard showDiagnosticsHUD else { return }
+        switch solverMode {
+        case .dem:
+            diagnosticsHUD = "Solver: DEM · height-field baseline"
+        case .mpmActive:
+            if let unlocked = mpmSims[unlockedTier]?.latestDiagnostics {
+                diagnosticsHUD = unlocked.summaryLine
+            } else {
+                diagnosticsHUD = "Solver: MPM · waiting for particles"
+            }
+        }
+        identificationHUD = parameterIdentifier.status.hudLine
+        posteriorHUD = parameterPosterior.state.hudLine
+        surfaceUncertaintyHUD = surfaceUncertainty?.field.hudLine ?? "Surf σ idle"
+        adaptivityHUD = isAdaptivityEnabled || showAdaptivityHeatmap
+            ? adaptivityController.latest.hudLine
+            : "Adapt idle"
+        neuralResidualHUD = isNeuralResidualEnabled || showNeuralResidualSurface
+            ? neuralResidual.stats.hudLine
+            : "Neural residual idle"
     }
 
     func stopGrainSimulationLoop() {
@@ -219,6 +617,28 @@ final class AppModel {
 
     func resetMandala() {
         stopAutoPlay()
+        if isIdentifying {
+            setIdentifying(false)
+        }
+        parameterIdentifier.reset()
+        parameterPosterior.reset()
+        surfaceUncertainty?.reset(fillRadius: unlockedTier.fillRadius)
+        adaptivityController.reset()
+        adaptivityController.enabled = false
+        isAdaptivityEnabled = false
+        showAdaptivityHeatmap = false
+        neuralResidual.reset()
+        isNeuralResidualEnabled = false
+        showNeuralResidualSurface = false
+        for viz in uncertaintyVisualizers.values {
+            viz.setEnabled(false)
+        }
+        for viz in adaptivityVisualizers.values {
+            viz.setEnabled(false)
+        }
+        for viz in neuralVisualizers.values {
+            viz.setEnabled(false)
+        }
         for i in 0..<37 {
             heapEntities[i]?.removeFromParent()
             heapEntities[i] = nil
@@ -236,10 +656,13 @@ final class AppModel {
 
         for tier in MandalaTier.allCases {
             applyTierUnlocked(tier, unlocked: tier == .universe, animate: false)
+            mpmSims[tier]?.setConstitutive(.defaultRice)
         }
 
+        GrainAudio.shared.resume()
         refreshHighlights()
         updateStatus()
+        refreshDiagnosticsHUD()
     }
 
     // MARK: - Placement
@@ -321,7 +744,14 @@ final class AppModel {
                   let tierEntity = tierRoots[tier] else { return }
 
             let progress = grainFillProgress(completed: completedOnTier, total: totalOnTier)
-            grainSims[tier]?.pour(at: slotXZ, ritualProgress: progress)
+            switch solverMode {
+            case .dem:
+                grainSims[tier]?.pour(at: slotXZ, ritualProgress: progress)
+            case .mpmActive:
+                mpmSims[tier]?.pour(at: slotXZ, ritualProgress: progress)
+                // Light DEM pulse so the height-field bulk still rises with ritual progress.
+                grainSims[tier]?.pour(at: slotXZ, ritualProgress: progress * 0.55)
+            }
 
             // A few RealityKit clusters still collide with kinematic rings.
             GrainPhysics.emitClusters(
@@ -471,6 +901,8 @@ final class AppModel {
     /// Last placement: pedestal + flame/gem finial in the middle of the celestial (top) ring.
     private func placeTopCenterpiece() {
         isComplete = true
+        // Grain sim loop keeps stepping filled tiers; stop cascading settle audio.
+        GrainAudio.shared.stopAll()
         statusMessage = "Final piece · Centerpiece on the celestial ring"
         refreshHighlights()
 
@@ -548,6 +980,13 @@ final class AppModel {
         unlockedTier = .universe
         stopGrainSimulationLoop()
         grainSims.removeAll()
+        mpmSims.removeAll()
+        uncertaintyVisualizers.removeAll()
+        adaptivityVisualizers.removeAll()
+        neuralVisualizers.removeAll()
+        surfaceUncertainty = nil
+        adaptivityController.reset()
+        neuralResidual.reset()
         tierRoots.removeAll()
         tierSlotsParents.removeAll()
         crownEntity = nil
@@ -573,6 +1012,11 @@ final class AppModel {
                 sim.attach(to: tierRoot)
                 grainSims[tier] = sim
             }
+            if let mpm = MPMSimulator(tier: tier) {
+                mpm.attach(to: tierRoot)
+                mpm.setEnabled(solverMode == .mpmActive)
+                mpmSims[tier] = mpm
+            }
 
             guard let slotsParent = tierRoot.findEntity(named: "TierSlots") else { continue }
             tierSlotsParents[tier] = slotsParent
@@ -592,38 +1036,15 @@ final class AppModel {
 
         paletteRoot = Entity()
         paletteRoot.name = "Palette"
-        // Park beside the mandala (not in front) so the bottom ring stays clear.
-        paletteRoot.position = SIMD3(0.62, 0.08, 0.08)
+        paletteRoot.isEnabled = false
         mandalaRoot.addChild(paletteRoot)
     }
 
     private func rebuildPalette() {
+        // Spatial material orbs removed — they cluttered the right side of the scene.
+        // Guided mode still uses each heap's preferred material; free mode keeps selection.
         paletteRoot.children.removeAll()
-
-        let kinds = HeapMaterialKind.allCases
-        let spacing: Float = 0.072
-        let startY = spacing * Float(kinds.count - 1) / 2
-
-        var trayMat = SimpleMaterial()
-        trayMat.color = .init(tint: UIColor(red: 0.25, green: 0.18, blue: 0.10, alpha: 1))
-        trayMat.metallic = .float(0.2)
-        trayMat.roughness = .float(0.6)
-        let tray = ModelEntity(
-            mesh: .generateBox(
-                size: SIMD3(0.08, spacing * Float(kinds.count) + 0.04, 0.012),
-                cornerRadius: 0.01
-            ),
-            materials: [trayMat]
-        )
-        tray.position = SIMD3(0, 0, -0.02)
-        paletteRoot.addChild(tray)
-
-        for (i, kind) in kinds.enumerated() {
-            let orb = MandalaBuilder.makePaletteOrb(kind: kind, selected: kind == selectedMaterial)
-            // Vertical strip on the right — keeps the front of the base ring open.
-            orb.position = SIMD3(0, startY - spacing * Float(i), 0)
-            paletteRoot.addChild(orb)
-        }
+        paletteRoot.isEnabled = false
     }
 
     private func refreshHighlights() {
@@ -726,7 +1147,7 @@ final class AppModel {
         case .guided:
             if let name = nextHeapName, let index = nextGuidedIndex {
                 let tier = HeapDefinition.all[index].tier
-                statusMessage = "\(tier.shortTitle) · \(name) · Tap the glowing beacon (or palette) · \(index + 1)/37"
+                statusMessage = "\(tier.shortTitle) · \(name) · Tap the glowing beacon · \(index + 1)/37"
             }
         case .free:
             statusMessage = "Free · \(unlockedTier.title) — place on the unlocked ring only."

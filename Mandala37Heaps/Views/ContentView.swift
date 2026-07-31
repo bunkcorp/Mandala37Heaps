@@ -50,7 +50,7 @@ struct ContentView: View {
                 Text("How to play")
                     .font(.headline)
                 Text("• Fill each ring level in order; the next smaller ring appears when a level is complete")
-                Text("• Guided mode: tap the glowing beacon (or any palette piece) to place the next heap")
+                Text("• Guided mode: tap the glowing beacon to place the next heap")
                 Text("• Free mode: pick a material, then tap an empty spot on the unlocked ring")
                 Text("• Finish all 37 to place the top ornament")
             }

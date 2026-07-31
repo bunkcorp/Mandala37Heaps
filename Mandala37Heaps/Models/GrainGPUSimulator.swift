@@ -95,6 +95,8 @@ final class GrainGPUSimulator {
 
     private var uniforms: GrainUniforms
     private var nextParticleSlot: UInt32 = 0
+    /// Frames remaining where settle audio is allowed after a pour / ring press.
+    private var settleAudioFramesRemaining: Int = 0
 
     private var hostEntity: Entity?
     private var surfaceEntity: ModelEntity?
@@ -219,7 +221,12 @@ final class GrainGPUSimulator {
 
         do {
             try buildMeshesIfNeeded()
-            if let surfaceEntity { host.addChild(surfaceEntity) }
+            // Height-field mesh reads as a flat cream/pink square on the plate — keep
+            // the sim, hide the surface. Particle billboards still show the pour.
+            if let surfaceEntity {
+                surfaceEntity.isEnabled = false
+                host.addChild(surfaceEntity)
+            }
             if let particleEntity { host.addChild(particleEntity) }
         } catch {
             print("[GrainGPU] mesh attach failed: \(error)")
@@ -256,6 +263,7 @@ final class GrainGPUSimulator {
         dispatchPulse(center: localXZ, radius: 0.09, heightAdd: add)
         refreshHeightStats()
         publishFillProgressIfNeeded(force: true)
+        settleAudioFramesRemaining = 90 // ~1.5s of settle ticks at 60fps
         GrainAudio.shared.playPour(intensity: 0.7 + ritualProgress * 0.4)
     }
 
@@ -374,9 +382,16 @@ final class GrainGPUSimulator {
             publishFillProgressIfNeeded(force: false)
         }
 
-        // Soft settle ticks while lots of grains are still airborne.
-        if written > 1200, frameIndex % 18 == 0 {
-            GrainAudio.shared.playSettle(intensity: min(1, Float(written) / 3500))
+        // Soft settle ticks only for a short window after pour / ring press —
+        // not for the entire life of a filled tier (that hissed forever after completion).
+        if settleAudioFramesRemaining > 0 {
+            settleAudioFramesRemaining -= 1
+            if written > 400, frameIndex % 18 == 0 {
+                let fade = Float(settleAudioFramesRemaining) / 90
+                GrainAudio.shared.playSettle(
+                    intensity: min(1, Float(written) / 3500) * max(0.2, fade)
+                )
+            }
         }
     }
 
@@ -403,6 +418,7 @@ final class GrainGPUSimulator {
     }
 
     func compressUnderRing() {
+        settleAudioFramesRemaining = 120
         GrainAudio.shared.playRingPress()
 
         guard let commandBuffer = queue.makeCommandBuffer(),
@@ -465,6 +481,17 @@ final class GrainGPUSimulator {
 
         refreshHeightStats()
         publishFillProgressIfNeeded(force: true)
+    }
+
+    /// CPU copy of the height field in meters (row-major, `gridResolution²`).
+    func sampleHeightFieldMeters() -> [Float] {
+        let n = Self.gridResolution * Self.gridResolution
+        let ptr = heightBuffer.contents().bindMemory(to: UInt32.self, capacity: n)
+        var out = [Float](repeating: 0, count: n)
+        for i in 0..<n {
+            out[i] = Float(ptr[i]) * 1e-6
+        }
+        return out
     }
 
     func setRitualFillFloor(_ progress: Float) {
