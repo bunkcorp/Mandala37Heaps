@@ -30,25 +30,25 @@ final class AppModel {
     var isAutoPlaying = false
     var didProcessDebugLaunchArguments = false
     var didRunDebugGameplay = false
-    /// Dual-solver: DEM baseline (default) or MPM active-region continuum.
-    var solverMode: SolverMode = .dem
+    /// Dual-solver: DEM baseline or MPM active-region continuum (default MPM for research stack).
+    var solverMode: SolverMode = .mpmActive
     /// Latest conservation / contact diagnostics (MPM path).
-    var diagnosticsHUD: String = "Solver: DEM"
+    var diagnosticsHUD: String = "Solver: MPM"
     var showDiagnosticsHUD: Bool = true
     /// Phase 2 online constitutive identification (FD Adam).
     var isIdentifying: Bool = false
     var identificationHUD: String = "ID idle"
     /// Phase 3 Bayesian posterior + surface uncertainty bands.
-    var showUncertaintyBands: Bool = false
+    var showUncertaintyBands: Bool = true
     var posteriorHUD: String = "Post idle"
     var surfaceUncertaintyHUD: String = "Surf σ idle"
     /// Phase 4 adaptive multiresolution.
-    var isAdaptivityEnabled: Bool = false
+    var isAdaptivityEnabled: Bool = true
     var showAdaptivityHeatmap: Bool = false
     var adaptivityHUD: String = "Adapt idle"
     /// Phase 5 physics-constrained neural residual.
-    var isNeuralResidualEnabled: Bool = false
-    var showNeuralResidualSurface: Bool = false
+    var isNeuralResidualEnabled: Bool = true
+    var showNeuralResidualSurface: Bool = true
     var neuralResidualHUD: String = "Neural residual idle"
 
     let mandalaRoot = Entity()
@@ -105,6 +105,23 @@ final class AppModel {
         ritualTool.attach(to: mandalaRoot)
         ritualTool.startHandTracking()
         startGrainSimulationLoop()
+        applyPreferredResearchDefaults()
+    }
+
+    /// Preferred research stack at launch / reset: MPM + Adapt + σ + Neural + δh + Target/Teacher.
+    private func applyPreferredResearchDefaults() {
+        solverMode = .mpmActive
+        for tier in MandalaTier.allCases {
+            mpmSims[tier]?.setEnabled(true)
+        }
+        setAdaptivityEnabled(true)
+        setUncertaintyBandsVisible(true)
+        setNeuralResidualEnabled(true)
+        setNeuralResidualSurfaceVisible(true)
+        // Live target if particles exist; synthetic teacher ensures a usable ID target either way.
+        captureIdentificationTarget()
+        captureSyntheticTeacherTarget()
+        refreshDiagnosticsHUD()
     }
 
     /// Per-frame Metal grain integrate / deposit / height-field relax (and optional MPM).
@@ -624,12 +641,7 @@ final class AppModel {
         parameterPosterior.reset()
         surfaceUncertainty?.reset(fillRadius: unlockedTier.fillRadius)
         adaptivityController.reset()
-        adaptivityController.enabled = false
-        isAdaptivityEnabled = false
-        showAdaptivityHeatmap = false
         neuralResidual.reset()
-        isNeuralResidualEnabled = false
-        showNeuralResidualSurface = false
         for viz in uncertaintyVisualizers.values {
             viz.setEnabled(false)
         }
@@ -662,7 +674,7 @@ final class AppModel {
         GrainAudio.shared.resume()
         refreshHighlights()
         updateStatus()
-        refreshDiagnosticsHUD()
+        applyPreferredResearchDefaults()
     }
 
     // MARK: - Placement
@@ -1000,6 +1012,7 @@ final class AppModel {
         simulation.gravity = SIMD3(0, -9.81, 0)
         mandalaRoot.components.set(simulation)
 
+        mandalaRoot.addChild(MandalaBuilder.makeTableCover())
         mandalaRoot.addChild(MandalaBuilder.makePlate())
 
         for tier in MandalaTier.allCases {

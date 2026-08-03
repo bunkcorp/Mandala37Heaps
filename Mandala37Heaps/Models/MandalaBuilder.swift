@@ -3,31 +3,550 @@ import simd
 import UIKit
 
 enum MandalaBuilder {
-    /// Base plate under the largest ring (heaps 1–17). Slightly oversized vs the metal fence.
+    /// Traditional square brocade table cover under the mandala (ground cloth).
+    /// Royal-blue outer field with Ashtamangala (eight auspicious symbols) in gold,
+    /// red + yellow borders, and a central triangle patchwork mosaic.
+    static func makeTableCover(size: Float = 1.18) -> Entity {
+        let root = Entity()
+        root.name = "MandalaTableCover"
+        // Sit just under the plate feet so the set rests on the cloth.
+        root.position = SIMD3(0, -0.0015, 0)
+
+        let clothY: Float = 0.0012
+
+        // Outer royal-blue brocade field.
+        var blueMat = SimpleMaterial()
+        blueMat.color = .init(tint: UIColor(red: 0.08, green: 0.18, blue: 0.55, alpha: 1))
+        blueMat.roughness = .float(0.72)
+        blueMat.metallic = .float(0.08)
+        let outer = ModelEntity(
+            mesh: .generateBox(size: SIMD3(size, clothY, size), cornerRadius: 0.004),
+            materials: [blueMat]
+        )
+        outer.name = "CoverBlueField"
+        outer.position = SIMD3(0, clothY * 0.5, 0)
+        root.addChild(outer)
+
+        var motifGold = SimpleMaterial()
+        motifGold.color = .init(tint: UIColor(red: 0.86, green: 0.78, blue: 0.42, alpha: 1))
+        motifGold.metallic = .float(0.72)
+        motifGold.roughness = .float(0.38)
+
+        var motifSilver = SimpleMaterial()
+        motifSilver.color = .init(tint: UIColor(red: 0.82, green: 0.84, blue: 0.88, alpha: 1))
+        motifSilver.metallic = .float(0.65)
+        motifSilver.roughness = .float(0.42)
+
+        // Dense cloud / vine fill so the blue field reads as woven brocade.
+        addCoverCloudFiligree(
+            to: root,
+            size: size,
+            y: clothY + 0.0006,
+            gold: motifGold,
+            silver: motifSilver
+        )
+
+        // Eight Auspicious Symbols around the blue margin (outside the central square).
+        let symbols = AshtamangalaSymbol.allCases
+        let symbolRadius = size * 0.38
+        let mosaicKeepout = size * 0.28
+        for (i, symbol) in symbols.enumerated() {
+            let angle = Float(i) * (.pi * 2 / Float(symbols.count)) - .pi / 2
+            let x = cos(angle) * symbolRadius
+            let z = sin(angle) * symbolRadius
+            // Skip if somehow under mosaic (safety).
+            if abs(x) < mosaicKeepout && abs(z) < mosaicKeepout { continue }
+            let glyph = makeAshtamangalaSymbol(symbol, gold: motifGold, silver: motifSilver)
+            glyph.name = "Ashtamangala_\(symbol.rawValue)"
+            glyph.position = SIMD3(x, clothY + 0.0010, z)
+            glyph.orientation = simd_quatf(angle: -angle + .pi / 2, axis: SIMD3(0, 1, 0))
+            glyph.scale = SIMD3(repeating: 1.15)
+            root.addChild(glyph)
+        }
+
+        // Smaller repeat of the eight symbols nearer the outer edge / corners.
+        let cornerRadius = size * 0.46
+        for (i, symbol) in symbols.enumerated() {
+            let angle = Float(i) * (.pi * 2 / Float(symbols.count)) - .pi / 2 + .pi / 8
+            let x = cos(angle) * cornerRadius
+            let z = sin(angle) * cornerRadius
+            let glyph = makeAshtamangalaSymbol(symbol, gold: motifGold, silver: motifSilver)
+            glyph.name = "AshtamangalaMini_\(symbol.rawValue)"
+            glyph.position = SIMD3(x, clothY + 0.0009, z)
+            glyph.orientation = simd_quatf(angle: -angle + .pi / 2, axis: SIMD3(0, 1, 0))
+            glyph.scale = SIMD3(repeating: 0.72)
+            root.addChild(glyph)
+        }
+
+        // Nested borders + central mosaic occupy the inner square.
+        let mosaicOuter = size * 0.52
+        let redBorderWidth = size * 0.045
+        let yellowBorderWidth = size * 0.038
+        let mosaicSize = mosaicOuter - 2 * (redBorderWidth + yellowBorderWidth)
+
+        addCoverBorderFrame(
+            to: root,
+            outer: mosaicOuter,
+            width: redBorderWidth,
+            y: clothY + 0.0006,
+            color: UIColor(red: 0.82, green: 0.12, blue: 0.12, alpha: 1),
+            name: "CoverRedBorder"
+        )
+        addCoverBorderFrame(
+            to: root,
+            outer: mosaicOuter - 2 * redBorderWidth,
+            width: yellowBorderWidth,
+            y: clothY + 0.0009,
+            color: UIColor(red: 0.92, green: 0.78, blue: 0.18, alpha: 1),
+            name: "CoverYellowBorder"
+        )
+
+        if let mosaic = makeTriangleMosaicEntity(extent: mosaicSize, divisions: 10) {
+            mosaic.position = SIMD3(0, clothY + 0.0014, 0)
+            root.addChild(mosaic)
+        }
+
+        return root
+    }
+
+    /// Tibetan Eight Auspicious Symbols (Ashtamangala).
+    private enum AshtamangalaSymbol: String, CaseIterable {
+        case parasol
+        case conch
+        case fish
+        case endlessKnot
+        case treasureVase
+        case victoryBanner
+        case lotus
+        case dharmaWheel
+    }
+
+    private static func makeAshtamangalaSymbol(
+        _ symbol: AshtamangalaSymbol,
+        gold: SimpleMaterial,
+        silver: SimpleMaterial
+    ) -> Entity {
+        switch symbol {
+        case .parasol: return makeSymbolParasol(gold: gold, silver: silver)
+        case .conch: return makeSymbolConch(gold: gold, silver: silver)
+        case .fish: return makeSymbolTwinFish(gold: gold)
+        case .endlessKnot: return makeSymbolEndlessKnot(gold: gold)
+        case .treasureVase: return makeSymbolTreasureVase(gold: gold, silver: silver)
+        case .victoryBanner: return makeSymbolVictoryBanner(gold: gold, silver: silver)
+        case .lotus: return makeSymbolLotus(gold: gold, silver: silver)
+        case .dharmaWheel: return makeSymbolDharmaWheel(gold: gold, silver: silver)
+        }
+    }
+
+    private static func makeSymbolParasol(gold: SimpleMaterial, silver: SimpleMaterial) -> Entity {
+        let root = Entity()
+        let stem = ModelEntity(
+            mesh: .generateCylinder(height: 0.055, radius: 0.0032),
+            materials: [gold]
+        )
+        stem.position = SIMD3(0, 0.001, 0)
+        root.addChild(stem)
+        let canopy = ModelEntity(
+            mesh: .generateSphere(radius: 0.028),
+            materials: [gold]
+        )
+        canopy.scale = SIMD3(1.15, 0.28, 1.15)
+        canopy.position = SIMD3(0, 0.001, -0.012)
+        root.addChild(canopy)
+        let finial = ModelEntity(mesh: .generateSphere(radius: 0.006), materials: [silver])
+        finial.position = SIMD3(0, 0.001, -0.028)
+        root.addChild(finial)
+        // Flat on cloth (XZ plane): tip canopy toward -Z in local, then parent yaws.
+        root.orientation = simd_quatf(angle: .pi / 2, axis: SIMD3(1, 0, 0))
+        return root
+    }
+
+    private static func makeSymbolConch(gold: SimpleMaterial, silver: SimpleMaterial) -> Entity {
+        let root = Entity()
+        let body = ModelEntity(mesh: .generateSphere(radius: 0.018), materials: [silver])
+        body.scale = SIMD3(1.35, 0.55, 1.0)
+        body.position = SIMD3(0, 0.001, 0)
+        root.addChild(body)
+        let spiral = ModelEntity(mesh: .generateSphere(radius: 0.010), materials: [gold])
+        spiral.scale = SIMD3(1.1, 0.45, 1.1)
+        spiral.position = SIMD3(0.012, 0.0012, 0.004)
+        root.addChild(spiral)
+        let mouth = ModelEntity(
+            mesh: .generateCone(height: 0.016, radius: 0.008),
+            materials: [gold]
+        )
+        mouth.orientation = simd_quatf(angle: .pi / 2, axis: SIMD3(0, 0, 1))
+        mouth.position = SIMD3(-0.018, 0.001, 0)
+        root.addChild(mouth)
+        return root
+    }
+
+    private static func makeSymbolTwinFish(gold: SimpleMaterial) -> Entity {
+        let root = Entity()
+        for (i, side) in [-1, 1].enumerated() {
+            let fish = Entity()
+            let body = ModelEntity(mesh: .generateSphere(radius: 0.012), materials: [gold])
+            body.scale = SIMD3(1.8, 0.45, 0.85)
+            fish.addChild(body)
+            let tail = ModelEntity(
+                mesh: .generateCone(height: 0.014, radius: 0.007),
+                materials: [gold]
+            )
+            tail.orientation = simd_quatf(angle: .pi, axis: SIMD3(0, 0, 1))
+            tail.position = SIMD3(-0.018, 0, 0)
+            fish.addChild(tail)
+            fish.position = SIMD3(0, 0.001, Float(side) * 0.012)
+            fish.orientation = simd_quatf(
+                angle: Float(i == 0 ? 0.35 : -0.35 + .pi),
+                axis: SIMD3(0, 1, 0)
+            )
+            root.addChild(fish)
+        }
+        return root
+    }
+
+    private static func makeSymbolEndlessKnot(gold: SimpleMaterial) -> Entity {
+        let root = Entity()
+        // Interlaced diamond lattice approximating the eternal knot.
+        let bars: [(SIMD3<Float>, Float)] = [
+            (SIMD3(0.036, 0.0012, 0.008), 0),
+            (SIMD3(0.036, 0.0012, 0.008), .pi / 2),
+            (SIMD3(0.028, 0.0012, 0.007), .pi / 4),
+            (SIMD3(0.028, 0.0012, 0.007), -.pi / 4),
+            (SIMD3(0.022, 0.0012, 0.006), .pi / 2.5),
+            (SIMD3(0.022, 0.0012, 0.006), -.pi / 2.5)
+        ]
+        for (size, yaw) in bars {
+            let bar = ModelEntity(mesh: .generateBox(size: size, cornerRadius: 0.0015), materials: [gold])
+            bar.orientation = simd_quatf(angle: yaw, axis: SIMD3(0, 1, 0))
+            bar.position = SIMD3(0, 0.001, 0)
+            root.addChild(bar)
+        }
+        for corner in [SIMD3<Float>(0.014, 0.0012, 0.014), SIMD3(0.014, 0.0012, -0.014),
+                       SIMD3(-0.014, 0.0012, 0.014), SIMD3(-0.014, 0.0012, -0.014)] {
+            let bead = ModelEntity(mesh: .generateSphere(radius: 0.0045), materials: [gold])
+            bead.scale = SIMD3(1, 0.4, 1)
+            bead.position = corner
+            root.addChild(bead)
+        }
+        return root
+    }
+
+    private static func makeSymbolTreasureVase(gold: SimpleMaterial, silver: SimpleMaterial) -> Entity {
+        let root = Entity()
+        let belly = ModelEntity(mesh: .generateSphere(radius: 0.016), materials: [gold])
+        belly.scale = SIMD3(1.05, 0.55, 1.05)
+        belly.position = SIMD3(0, 0.001, 0.002)
+        root.addChild(belly)
+        let neck = ModelEntity(
+            mesh: .generateCylinder(height: 0.014, radius: 0.006),
+            materials: [gold]
+        )
+        neck.orientation = simd_quatf(angle: .pi / 2, axis: SIMD3(1, 0, 0))
+        neck.position = SIMD3(0, 0.001, -0.012)
+        root.addChild(neck)
+        let rim = ModelEntity(
+            mesh: .generateCylinder(height: 0.004, radius: 0.010),
+            materials: [silver]
+        )
+        rim.orientation = simd_quatf(angle: .pi / 2, axis: SIMD3(1, 0, 0))
+        rim.position = SIMD3(0, 0.001, -0.020)
+        root.addChild(rim)
+        let jewel = ModelEntity(mesh: .generateSphere(radius: 0.005), materials: [silver])
+        jewel.position = SIMD3(0, 0.0012, -0.024)
+        root.addChild(jewel)
+        return root
+    }
+
+    private static func makeSymbolVictoryBanner(gold: SimpleMaterial, silver: SimpleMaterial) -> Entity {
+        let root = Entity()
+        let pole = ModelEntity(
+            mesh: .generateCylinder(height: 0.055, radius: 0.003),
+            materials: [gold]
+        )
+        pole.orientation = simd_quatf(angle: .pi / 2, axis: SIMD3(1, 0, 0))
+        pole.position = SIMD3(0, 0.001, 0)
+        root.addChild(pole)
+        for i in 0..<3 {
+            let t = Float(i) / 2.0
+            let cylinder = ModelEntity(
+                mesh: .generateCylinder(height: 0.010, radius: 0.014 - t * 0.003),
+                materials: [i % 2 == 0 ? gold : silver]
+            )
+            cylinder.orientation = simd_quatf(angle: .pi / 2, axis: SIMD3(1, 0, 0))
+            cylinder.position = SIMD3(0, 0.001, -0.008 - Float(i) * 0.011)
+            root.addChild(cylinder)
+        }
+        let top = ModelEntity(mesh: .generateSphere(radius: 0.006), materials: [gold])
+        top.position = SIMD3(0, 0.001, -0.042)
+        root.addChild(top)
+        return root
+    }
+
+    private static func makeSymbolLotus(gold: SimpleMaterial, silver: SimpleMaterial) -> Entity {
+        let root = Entity()
+        let petalCount = 8
+        for i in 0..<petalCount {
+            let angle = Float(i) * (.pi * 2 / Float(petalCount))
+            let petal = ModelEntity(mesh: .generateSphere(radius: 0.011), materials: [gold])
+            petal.scale = SIMD3(0.55, 0.28, 1.35)
+            petal.position = SIMD3(cos(angle) * 0.012, 0.001, sin(angle) * 0.012)
+            petal.orientation = simd_quatf(angle: -angle, axis: SIMD3(0, 1, 0))
+            root.addChild(petal)
+        }
+        let center = ModelEntity(mesh: .generateSphere(radius: 0.008), materials: [silver])
+        center.scale = SIMD3(1, 0.35, 1)
+        center.position = SIMD3(0, 0.0012, 0)
+        root.addChild(center)
+        return root
+    }
+
+    private static func makeSymbolDharmaWheel(gold: SimpleMaterial, silver: SimpleMaterial) -> Entity {
+        let root = Entity()
+        let hub = ModelEntity(mesh: .generateCylinder(height: 0.002, radius: 0.008), materials: [silver])
+        hub.position = SIMD3(0, 0.001, 0)
+        root.addChild(hub)
+        let rim = ModelEntity(
+            mesh: .generateCylinder(height: 0.0018, radius: 0.026),
+            materials: [gold]
+        )
+        rim.position = SIMD3(0, 0.0009, 0)
+        root.addChild(rim)
+        // Hollow the rim visually with a blue-ish inner disc (thin dark ring read).
+        var inner = SimpleMaterial()
+        inner.color = .init(tint: UIColor(red: 0.08, green: 0.18, blue: 0.55, alpha: 1))
+        let hole = ModelEntity(
+            mesh: .generateCylinder(height: 0.0022, radius: 0.020),
+            materials: [inner]
+        )
+        hole.position = SIMD3(0, 0.0011, 0)
+        root.addChild(hole)
+        for i in 0..<8 {
+            let angle = Float(i) * (.pi / 4)
+            let spoke = ModelEntity(
+                mesh: .generateBox(size: SIMD3(0.048, 0.0014, 0.0045), cornerRadius: 0.001),
+                materials: [gold]
+            )
+            spoke.orientation = simd_quatf(angle: angle, axis: SIMD3(0, 1, 0))
+            spoke.position = SIMD3(0, 0.0013, 0)
+            root.addChild(spoke)
+        }
+        return root
+    }
+
+    /// Dense gold/silver cloud-scroll fill for the blue silk field.
+    private static func addCoverCloudFiligree(
+        to parent: Entity,
+        size: Float,
+        y: Float,
+        gold: SimpleMaterial,
+        silver: SimpleMaterial
+    ) {
+        let keepout = size * 0.27
+        let step = size / 9.5
+        let extent = size * 0.48
+        var idx = 0
+        for iz in -5...5 {
+            for ix in -5...5 {
+                let x = Float(ix) * step + (iz % 2 == 0 ? step * 0.35 : 0)
+                let z = Float(iz) * step
+                if abs(x) > extent || abs(z) > extent { continue }
+                if abs(x) < keepout && abs(z) < keepout { continue }
+                let swirl = makeCoverCloudScroll(
+                    material: idx % 3 == 0 ? silver : gold,
+                    compact: idx % 2 == 0
+                )
+                swirl.position = SIMD3(x, y, z)
+                swirl.orientation = simd_quatf(
+                    angle: Float(idx % 4) * (.pi / 2) + 0.2,
+                    axis: SIMD3(0, 1, 0)
+                )
+                swirl.scale = SIMD3(repeating: idx % 5 == 0 ? 0.85 : 0.65)
+                parent.addChild(swirl)
+                idx += 1
+            }
+        }
+    }
+
+    private static func makeCoverCloudScroll(material: SimpleMaterial, compact: Bool) -> Entity {
+        let root = Entity()
+        let a = ModelEntity(
+            mesh: .generateBox(size: SIMD3(compact ? 0.022 : 0.030, 0.0009, 0.006), cornerRadius: 0.002),
+            materials: [material]
+        )
+        root.addChild(a)
+        let b = ModelEntity(
+            mesh: .generateBox(size: SIMD3(0.006, 0.0009, compact ? 0.018 : 0.024), cornerRadius: 0.002),
+            materials: [material]
+        )
+        b.position = SIMD3(0.008, 0, 0.006)
+        root.addChild(b)
+        let curl = ModelEntity(mesh: .generateSphere(radius: 0.006), materials: [material])
+        curl.scale = SIMD3(1, 0.28, 1)
+        curl.position = SIMD3(-0.010, 0, -0.004)
+        root.addChild(curl)
+        return root
+    }
+
+    private static func addCoverBorderFrame(
+        to parent: Entity,
+        outer: Float,
+        width: Float,
+        y: Float,
+        color: UIColor,
+        name: String
+    ) {
+        var mat = SimpleMaterial()
+        mat.color = .init(tint: color)
+        mat.roughness = .float(0.55)
+        mat.metallic = .float(0.12)
+        let frame = Entity()
+        frame.name = name
+        let half = outer * 0.5
+        let inner = outer - 2 * width
+        // Four strips around the square.
+        let strips: [(SIMD3<Float>, SIMD3<Float>)] = [
+            (SIMD3(outer, 0.0014, width), SIMD3(0, y, half - width * 0.5)),   // +Z
+            (SIMD3(outer, 0.0014, width), SIMD3(0, y, -(half - width * 0.5))), // -Z
+            (SIMD3(width, 0.0014, inner), SIMD3(half - width * 0.5, y, 0)),   // +X
+            (SIMD3(width, 0.0014, inner), SIMD3(-(half - width * 0.5), y, 0))  // -X
+        ]
+        for (size, pos) in strips {
+            let strip = ModelEntity(mesh: .generateBox(size: size), materials: [mat])
+            strip.position = pos
+            frame.addChild(strip)
+        }
+        parent.addChild(frame)
+    }
+
+    /// Concentric diamond patchwork from a square grid of split triangles.
+    private static func makeTriangleMosaicEntity(extent: Float, divisions: Int) -> Entity? {
+        let root = Entity()
+        root.name = "CoverTriangleMosaic"
+        let n = max(4, divisions)
+        let cell = extent / Float(n)
+        let origin = -extent * 0.5
+        let center = Float(n - 1) * 0.5
+
+        let palette: [UIColor] = [
+            UIColor(red: 0.96, green: 0.94, blue: 0.90, alpha: 1), // center white/silver
+            UIColor(red: 0.88, green: 0.18, blue: 0.16, alpha: 1), // red
+            UIColor(red: 0.12, green: 0.55, blue: 0.28, alpha: 1), // green
+            UIColor(red: 0.16, green: 0.32, blue: 0.78, alpha: 1), // blue
+            UIColor(red: 0.92, green: 0.78, blue: 0.16, alpha: 1), // yellow
+            UIColor(red: 0.75, green: 0.72, blue: 0.68, alpha: 1)  // silver brocade
+        ]
+
+        // Build one mesh per color bucket for fewer draw calls.
+        var positionsByColor: [[SIMD3<Float>]] = Array(repeating: [], count: palette.count)
+        var indicesByColor: [[UInt32]] = Array(repeating: [], count: palette.count)
+
+        for jz in 0..<n {
+            for ix in 0..<n {
+                let ring = Int(max(abs(Float(ix) - center), abs(Float(jz) - center)))
+                let colorIndex = min(ring, palette.count - 1)
+                let x0 = origin + Float(ix) * cell
+                let z0 = origin + Float(jz) * cell
+                let x1 = x0 + cell
+                let z1 = z0 + cell
+                // Two triangles per cell; alternate split for a denser diamond read.
+                let flip = (ix + jz) % 2 == 0
+                let tris: [[SIMD3<Float>]]
+                if flip {
+                    tris = [
+                        [SIMD3(x0, 0, z0), SIMD3(x1, 0, z0), SIMD3(x0, 0, z1)],
+                        [SIMD3(x1, 0, z0), SIMD3(x1, 0, z1), SIMD3(x0, 0, z1)]
+                    ]
+                } else {
+                    tris = [
+                        [SIMD3(x0, 0, z0), SIMD3(x1, 0, z0), SIMD3(x1, 0, z1)],
+                        [SIMD3(x0, 0, z0), SIMD3(x1, 0, z1), SIMD3(x0, 0, z1)]
+                    ]
+                }
+                // Color each triangle slightly differently within the ring for shimmer.
+                for (t, tri) in tris.enumerated() {
+                    let cidx = (colorIndex + t) % palette.count
+                    let base = UInt32(positionsByColor[cidx].count)
+                    positionsByColor[cidx].append(contentsOf: tri)
+                    indicesByColor[cidx].append(contentsOf: [base, base + 1, base + 2])
+                }
+            }
+        }
+
+        for (ci, color) in palette.enumerated() {
+            let positions = positionsByColor[ci]
+            let indices = indicesByColor[ci]
+            guard !positions.isEmpty else { continue }
+            let normals = [SIMD3<Float>](repeating: SIMD3(0, 1, 0), count: positions.count)
+            var descriptor = MeshDescriptor(name: "Mosaic_\(ci)")
+            descriptor.positions = MeshBuffers.Positions(positions)
+            descriptor.normals = MeshBuffers.Normals(normals)
+            descriptor.primitives = .triangles(indices)
+            guard let mesh = try? MeshResource.generate(from: [descriptor]) else { continue }
+            var mat = SimpleMaterial()
+            mat.color = .init(tint: color)
+            mat.roughness = .float(0.62)
+            mat.metallic = .float(ci == 5 ? 0.35 : 0.06)
+            let entity = ModelEntity(mesh: mesh, materials: [mat])
+            root.addChild(entity)
+        }
+        return root
+    }
+
+    /// Base plate under the largest ring (heaps 1–17). Silver tray with gold accents.
     static func makePlate(radius: Float = 0.56) -> Entity {
         let root = Entity()
         root.name = "MandalaPlate"
 
+        let gold = ringOrnamentGoldMaterial()
+
         let baseMesh = MeshResource.generateCylinder(height: 0.028, radius: radius)
-        var gold = SimpleMaterial()
-        gold.color = .init(tint: UIColor(red: 0.78, green: 0.60, blue: 0.18, alpha: 1))
-        gold.metallic = .float(0.88)
-        gold.roughness = .float(0.32)
-        let base = ModelEntity(mesh: baseMesh, materials: [gold])
+        var silver = SimpleMaterial()
+        silver.color = .init(tint: UIColor(red: 0.76, green: 0.78, blue: 0.82, alpha: 1))
+        silver.metallic = .float(0.92)
+        silver.roughness = .float(0.34)
+        let base = ModelEntity(mesh: baseMesh, materials: [silver])
         base.name = "PlateBase"
         base.position = SIMD3(0, 0.014, 0)
         base.components.set(GroundingShadowComponent(castsShadow: true))
         root.addChild(base)
 
         let rimMesh = MeshResource.generateCylinder(height: 0.018, radius: radius * 1.03)
-        var rimMat = SimpleMaterial()
-        rimMat.color = .init(tint: UIColor(red: 0.92, green: 0.74, blue: 0.28, alpha: 1))
-        rimMat.metallic = .float(0.9)
-        rimMat.roughness = .float(0.25)
-        let rim = ModelEntity(mesh: rimMesh, materials: [rimMat])
+        let rim = ModelEntity(mesh: rimMesh, materials: [gold])
         rim.name = "PlateRim"
         rim.position = SIMD3(0, 0.032, 0)
         root.addChild(rim)
+
+        // Upright gold lotus-petal fringe on the plate rim (reference base).
+        let petalCount = 24
+        for i in 0..<petalCount {
+            let angle = Float(i) * (.pi * 2 / Float(petalCount))
+            let petal = ModelEntity(
+                mesh: .generateBox(size: SIMD3(0.004, 0.016, 0.012), cornerRadius: 0.004),
+                materials: [gold]
+            )
+            petal.position = SIMD3(
+                cos(angle) * radius * 1.01,
+                0.042,
+                sin(angle) * radius * 1.01
+            )
+            petal.orientation = simd_quatf(angle: -angle, axis: SIMD3(0, 1, 0))
+            root.addChild(petal)
+        }
+
+        // Running key / fret band on the upper rim edge.
+        let keyCount = 36
+        for i in 0..<keyCount {
+            let angle = Float(i) * (.pi * 2 / Float(keyCount))
+            let bar = ModelEntity(
+                mesh: .generateBox(size: SIMD3(0.002, 0.003, radius * 0.05)),
+                materials: [gold]
+            )
+            let r = radius * (i % 2 == 0 ? 1.015 : 1.005)
+            bar.position = SIMD3(cos(angle) * r, 0.038, sin(angle) * r)
+            bar.orientation = simd_quatf(angle: -angle, axis: SIMD3(0, 1, 0))
+            root.addChild(bar)
+        }
 
         let inlayMesh = MeshResource.generateCylinder(height: 0.004, radius: radius * 0.92)
         var inlay = SimpleMaterial()
@@ -38,22 +557,6 @@ enum MandalaBuilder {
         inlayEntity.name = "PlateInlay"
         inlayEntity.position = SIMD3(0, 0.029, 0)
         root.addChild(inlayEntity)
-
-        for (i, color) in [
-            UIColor(red: 0.85, green: 0.25, blue: 0.22, alpha: 1),
-            UIColor(red: 0.95, green: 0.85, blue: 0.25, alpha: 1),
-            UIColor(red: 0.25, green: 0.55, blue: 0.85, alpha: 1),
-            UIColor(red: 0.95, green: 0.95, blue: 0.95, alpha: 1)
-        ].enumerated() {
-            let angle = Float(i) * (.pi / 2)
-            let marker = ModelEntity(
-                mesh: .generateBox(size: SIMD3(0.035, 0.006, 0.012)),
-                materials: [SimpleMaterial(color: color, isMetallic: true)]
-            )
-            marker.position = SIMD3(cos(angle) * radius * 0.96, 0.034, sin(angle) * radius * 0.96)
-            marker.orientation = simd_quatf(angle: -angle, axis: SIMD3(0, 1, 0))
-            root.addChild(marker)
-        }
 
         // Static floor so physical grain clusters rest on the plate top.
         GrainPhysics.attachPlateCollider(to: root, radius: radius, topY: 0.041)
@@ -299,15 +802,16 @@ enum MandalaBuilder {
     }
 
     /// Open metal hoop approximated with box segments around the circle,
-    /// studded with jewels and gold embossed Dharma / mantra ornaments.
+    /// studded with jewel flowers and gold embossed plaques (reference mandala-set look).
     static func makeMetalRing(radius: Float, height: Float) -> Entity {
         let root = Entity()
         root.name = "MetalRing"
 
+        // Silver filigree body (gold reserved for plaques / bezels).
         var mat = SimpleMaterial()
-        mat.color = .init(tint: UIColor(red: 0.85, green: 0.68, blue: 0.22, alpha: 1))
-        mat.metallic = .float(0.92)
-        mat.roughness = .float(0.28)
+        mat.color = .init(tint: UIColor(red: 0.78, green: 0.80, blue: 0.84, alpha: 1))
+        mat.metallic = .float(0.94)
+        mat.roughness = .float(0.32)
 
         let segments = 28
         let thickness: Float = 0.016
@@ -337,26 +841,23 @@ enum MandalaBuilder {
     // MARK: - Ring wall bedazzling
 
     private enum RingGemKind: CaseIterable {
-        case turquoise, coral, sapphire, amber, pearl
+        case turquoise, coral
 
         var color: UIColor {
             switch self {
-            case .turquoise: return UIColor(red: 0.12, green: 0.78, blue: 0.72, alpha: 1)
-            case .coral: return UIColor(red: 0.92, green: 0.28, blue: 0.22, alpha: 1)
-            case .sapphire: return UIColor(red: 0.18, green: 0.38, blue: 0.92, alpha: 1)
-            case .amber: return UIColor(red: 0.95, green: 0.72, blue: 0.18, alpha: 1)
-            case .pearl: return UIColor(red: 0.96, green: 0.94, blue: 0.90, alpha: 1)
+            case .turquoise: return UIColor(red: 0.10, green: 0.72, blue: 0.68, alpha: 1)
+            case .coral: return UIColor(red: 0.90, green: 0.26, blue: 0.22, alpha: 1)
             }
         }
     }
 
-    /// Circumference-scaled jewel / motif count (8–16 gems). Layout unchanged.
-    private static func ringGemCount(forRadius radius: Float) -> Int {
+    /// Circumference-scaled motif slots (plaques + bead flowers interleaved).
+    private static func ringMotifCount(forRadius radius: Float) -> Int {
         switch radius {
-        case 0.45...: return 16
-        case 0.28...: return 12
-        case 0.18...: return 10
-        default: return 8
+        case 0.45...: return 12
+        case 0.28...: return 10
+        case 0.18...: return 8
+        default: return 6
         }
     }
 
@@ -374,77 +875,68 @@ enum MandalaBuilder {
         ornaments.name = "RingOrnaments"
         root.addChild(ornaments)
 
-        let gemCount = ringGemCount(forRadius: radius)
+        let motifCount = ringMotifCount(forRadius: radius)
         let outerR = radius + thickness * 0.55
-        // Large enough to read as studs on the faceted wall from immersive distance.
-        let gemRadius = max(0.0075, min(0.012, radius * 0.022))
+        let gemRadius = max(0.0065, min(0.0105, radius * 0.019))
         let gold = ringOrnamentGoldMaterial()
+        let plaqueScale = max(0.75, min(1.35, radius / 0.34))
 
-        // Mid-height row of inset gems around the outer faceted wall.
-        // Yaw −angle: local +X → world (cos θ, 0, sin θ) = outward radial
-        // (gems/plaques protrude on +X; ring box segments also use −angle for Z-tangent).
-        for i in 0..<gemCount {
-            let angle = Float(i) * (.pi * 2 / Float(gemCount))
-            let kind = RingGemKind.allCases[i % RingGemKind.allCases.count]
-            let stud = makeGemStud(kind: kind, gemRadius: gemRadius, gold: gold)
-            stud.position = SIMD3(cos(angle) * outerR, 0, sin(angle) * outerR)
-            stud.orientation = simd_quatf(angle: -angle, axis: SIMD3(0, 1, 0))
-            gems.addChild(stud)
-        }
+        // Interleave gold plaques and coral/turquoise bead flowers around the wall
+        // (matches traditional silver mandala-set decoration).
+        for i in 0..<motifCount {
+            let angle = Float(i) * (.pi * 2 / Float(motifCount))
+            let yaw = simd_quatf(angle: -angle, axis: SIMD3(0, 1, 0))
+            let pos = SIMD3(cos(angle) * (outerR + 0.002), 0, sin(angle) * (outerR + 0.002))
 
-        // Gold embossed medallions (Wheel of Dharma / lotus) between every other gem pair.
-        let medallionCount = max(4, gemCount / 2)
-        let medallionScale = max(0.7, min(1.25, radius / 0.36))
-        for i in 0..<medallionCount {
-            let angle = (Float(i) + 0.5) * (.pi * 2 / Float(medallionCount))
-            let medallion: Entity = (i % 2 == 0)
-                ? makeDharmaWheelMedallion(scale: medallionScale, gold: gold)
-                : makeLotusMedallion(scale: medallionScale, gold: gold)
-            // Alternate above/below the gem equator so wall stays within height.
-            let y: Float = (i % 2 == 0) ? height * 0.22 : -height * 0.22
-            medallion.position = SIMD3(cos(angle) * (outerR + 0.001), y, sin(angle) * (outerR + 0.001))
-            medallion.orientation = simd_quatf(angle: -angle, axis: SIMD3(0, 1, 0))
-            ornaments.addChild(medallion)
-        }
-
-        // Script / mantra plaques on the outer wall (Unicode Tibetan; raised mesh text).
-        // Fewer, larger plaques; parked mid-way between gem studs so jewels don't cover glyphs.
-        let mantras = ["ༀ", "ཨོཾ", "མཎི", "པདྨེ", "ཧཱུྃ", "ༀ"]
-        let plaqueCount = min(4, max(3, gemCount / 4))
-        for i in 0..<plaqueCount {
-            let gemStep = Float(gemCount) / Float(plaqueCount)
-            let angle = (Float(i) * gemStep + 0.5) * (.pi * 2 / Float(gemCount))
-            let plaque = makeMantraPlaque(
-                text: mantras[i % mantras.count],
-                scale: medallionScale,
-                gold: gold
-            )
-            plaque.position = SIMD3(
-                cos(angle) * (outerR + 0.0035),
-                0,
-                sin(angle) * (outerR + 0.0035)
-            )
-            plaque.orientation = simd_quatf(angle: -angle, axis: SIMD3(0, 1, 0))
-            ornaments.addChild(plaque)
-        }
-
-        // Fine gold bead course near the rim for extra sparkle (every other gem slot).
-        let beadR = gemRadius * 0.38
-        for i in 0..<gemCount where i % 2 == 0 {
-            let angle = Float(i) * (.pi * 2 / Float(gemCount)) + (.pi / Float(gemCount))
-            for sign: Float in [1, -1] {
-                let bead = ModelEntity(
-                    mesh: .generateSphere(radius: beadR),
-                    materials: [gold]
+            if i % 2 == 0 {
+                let plaque: Entity
+                switch (i / 2) % 3 {
+                case 0:
+                    plaque = makeOctagonalGoldPlaque(
+                        content: .mantra(["ༀ", "ཨོཾ", "མཎི", "པདྨེ", "ཧཱུྃ"][(i / 2) % 5]),
+                        scale: plaqueScale,
+                        gold: gold
+                    )
+                case 1:
+                    plaque = makeOctagonalGoldPlaque(content: .dharmaWheel, scale: plaqueScale, gold: gold)
+                default:
+                    plaque = makeOctagonalGoldPlaque(content: .lotus, scale: plaqueScale, gold: gold)
+                }
+                plaque.position = pos
+                plaque.orientation = yaw
+                ornaments.addChild(plaque)
+            } else {
+                // Alternate flower polarity: turquoise center / coral petals, then reverse.
+                let turquoiseCenter = ((i / 2) % 2 == 0)
+                let flower = makeBeadFlower(
+                    center: turquoiseCenter ? .turquoise : .coral,
+                    petal: turquoiseCenter ? .coral : .turquoise,
+                    gemRadius: gemRadius,
+                    gold: gold
                 )
-                bead.position = SIMD3(
-                    cos(angle) * (outerR + beadR * 0.2),
-                    sign * height * 0.32,
-                    sin(angle) * (outerR + beadR * 0.2)
-                )
-                gems.addChild(bead)
+                flower.position = pos
+                flower.orientation = yaw
+                gems.addChild(flower)
             }
         }
+
+        // Scalloped / lotus-petal gold rim accents along top and bottom edges.
+        addScallopedRim(
+            to: ornaments,
+            radius: outerR,
+            height: height,
+            count: max(motifCount * 2, 12),
+            gold: gold
+        )
+
+        // Fine key / fret band near the upper rim (reference lowest-tray motif, scaled).
+        addKeyPatternBand(
+            to: ornaments,
+            radius: outerR + 0.0005,
+            y: height * 0.38,
+            count: max(motifCount * 3, 18),
+            gold: gold
+        )
     }
 
     private static func ringOrnamentGoldMaterial() -> SimpleMaterial {
@@ -455,11 +947,158 @@ enum MandalaBuilder {
         return gold
     }
 
+    /// Coral / turquoise flower cluster: large center + six petal beads in a gold bezel.
+    private static func makeBeadFlower(
+        center: RingGemKind,
+        petal: RingGemKind,
+        gemRadius: Float,
+        gold: SimpleMaterial
+    ) -> Entity {
+        let root = Entity()
+        root.name = "BeadFlower_\(center)_\(petal)"
+
+        let bezel = ModelEntity(
+            mesh: .generateCylinder(height: gemRadius * 0.55, radius: gemRadius * 2.35),
+            materials: [gold]
+        )
+        bezel.orientation = simd_quatf(angle: .pi / 2, axis: SIMD3(0, 0, 1))
+        bezel.position = SIMD3(gemRadius * 0.15, 0, 0)
+        root.addChild(bezel)
+
+        let centerGem = ModelEntity(
+            mesh: .generateSphere(radius: gemRadius * 1.05),
+            materials: [UnlitMaterial(color: center.color)]
+        )
+        centerGem.position = SIMD3(gemRadius * 0.55, 0, 0)
+        root.addChild(centerGem)
+
+        let petalR = gemRadius * 0.48
+        let orbit = gemRadius * 1.35
+        for i in 0..<6 {
+            let a = Float(i) * (.pi * 2 / 6)
+            let petalGem = ModelEntity(
+                mesh: .generateSphere(radius: petalR),
+                materials: [UnlitMaterial(color: petal.color)]
+            )
+            petalGem.position = SIMD3(
+                gemRadius * 0.45,
+                cos(a) * orbit,
+                sin(a) * orbit
+            )
+            root.addChild(petalGem)
+        }
+        return root
+    }
+
+    private enum PlaqueContent {
+        case mantra(String)
+        case dharmaWheel
+        case lotus
+    }
+
+    /// Raised octagonal gold plaque with embossed motif (reference wall plates).
+    private static func makeOctagonalGoldPlaque(
+        content: PlaqueContent,
+        scale: Float,
+        gold: SimpleMaterial
+    ) -> Entity {
+        let root = Entity()
+        root.name = "GoldPlaque"
+
+        let w = 0.028 * scale
+        let h = 0.034 * scale
+        let depth = 0.0045 * scale
+
+        // Approximate octagon: square plate + corner cuts via slightly rounded box.
+        let plate = ModelEntity(
+            mesh: .generateBox(size: SIMD3(depth, h, w), cornerRadius: min(w, h) * 0.18),
+            materials: [gold]
+        )
+        plate.position = SIMD3(depth * 0.55, 0, 0)
+        root.addChild(plate)
+
+        // Thin raised frame.
+        let frame = ModelEntity(
+            mesh: .generateBox(size: SIMD3(depth * 0.55, h * 1.08, w * 1.08), cornerRadius: min(w, h) * 0.2),
+            materials: [gold]
+        )
+        frame.position = SIMD3(depth * 0.25, 0, 0)
+        root.addChild(frame)
+
+        switch content {
+        case .mantra(let text):
+            let glyph = makeMantraPlaque(text: text, scale: scale * 0.72, gold: gold)
+            glyph.position = SIMD3(depth * 1.15, 0, 0)
+            root.addChild(glyph)
+        case .dharmaWheel:
+            let wheel = makeDharmaWheelMedallion(scale: scale * 0.85, gold: gold)
+            wheel.position = SIMD3(depth * 1.1, 0, 0)
+            root.addChild(wheel)
+        case .lotus:
+            let lotus = makeLotusMedallion(scale: scale * 0.9, gold: gold)
+            lotus.position = SIMD3(depth * 1.1, 0, 0)
+            root.addChild(lotus)
+        }
+        return root
+    }
+
+    private static func addScallopedRim(
+        to parent: Entity,
+        radius: Float,
+        height: Float,
+        count: Int,
+        gold: SimpleMaterial
+    ) {
+        let petalH = height * 0.09
+        let petalW = max(0.006, radius * 0.028)
+        for i in 0..<count {
+            let angle = Float(i) * (.pi * 2 / Float(count))
+            for sign: Float in [1, -1] {
+                let petal = ModelEntity(
+                    mesh: .generateBox(
+                        size: SIMD3(0.003, petalH, petalW),
+                        cornerRadius: petalW * 0.35
+                    ),
+                    materials: [gold]
+                )
+                petal.position = SIMD3(
+                    cos(angle) * (radius + 0.001),
+                    sign * (height * 0.48),
+                    sin(angle) * (radius + 0.001)
+                )
+                petal.orientation = simd_quatf(angle: -angle, axis: SIMD3(0, 1, 0))
+                parent.addChild(petal)
+            }
+        }
+    }
+
+    private static func addKeyPatternBand(
+        to parent: Entity,
+        radius: Float,
+        y: Float,
+        count: Int,
+        gold: SimpleMaterial
+    ) {
+        let step = (.pi * 2) / Float(count)
+        let barLen = radius * step * 0.55
+        for i in 0..<count {
+            let angle = Float(i) * step
+            let bar = ModelEntity(
+                mesh: .generateBox(size: SIMD3(0.0022, 0.0035, barLen)),
+                materials: [gold]
+            )
+            // Stagger to suggest a running key / fret.
+            let radial = radius + (i % 2 == 0 ? 0.0012 : 0.0004)
+            bar.position = SIMD3(cos(angle) * radial, y, sin(angle) * radial)
+            bar.orientation = simd_quatf(angle: -angle, axis: SIMD3(0, 1, 0))
+            parent.addChild(bar)
+        }
+    }
+
     private static func makeGemStud(kind: RingGemKind, gemRadius: Float, gold: SimpleMaterial) -> Entity {
         let root = Entity()
         root.name = "GemStud_\(kind)"
 
-        // Shallow gold bezel so the stone reads as inset in the wall.
         let bezel = ModelEntity(
             mesh: .generateSphere(radius: gemRadius * 1.35),
             materials: [gold]
@@ -472,7 +1111,6 @@ enum MandalaBuilder {
             mesh: .generateSphere(radius: gemRadius),
             materials: [UnlitMaterial(color: kind.color)]
         )
-        // Slightly proud of the bezel so unlit color pops.
         gem.position = SIMD3(gemRadius * 0.35, 0, 0)
         gem.scale = SIMD3(0.72, 1.0, 1.0)
         root.addChild(gem)
@@ -686,12 +1324,32 @@ enum MandalaBuilder {
         flameRoot.addChild(flameTip)
 
         let gem = ModelEntity(
-            mesh: .generateSphere(radius: 0.028),
-            materials: [UnlitMaterial(color: UIColor(red: 0.05, green: 0.95, blue: 0.48, alpha: 1))]
+            mesh: .generateSphere(radius: 0.022),
+            materials: [UnlitMaterial(color: UIColor(red: 0.90, green: 0.22, blue: 0.20, alpha: 1))]
         )
-        gem.name = "TurquoiseGem"
+        gem.name = "FinialCenterGem"
         gem.position = SIMD3(0, 0.07, 0)
         flameRoot.addChild(gem)
+
+        // Small Dharma wheel overlay on the flame face (reference finial).
+        let wheel = makeDharmaWheelMedallion(scale: 2.4, gold: gold)
+        wheel.position = SIMD3(0.012, 0.07, 0)
+        flameRoot.addChild(wheel)
+
+        // Four turquoise accent beads around the wheel.
+        for i in 0..<4 {
+            let a = Float(i) * (.pi / 2) + .pi / 4
+            let bead = ModelEntity(
+                mesh: .generateSphere(radius: 0.008),
+                materials: [UnlitMaterial(color: UIColor(red: 0.10, green: 0.72, blue: 0.68, alpha: 1))]
+            )
+            bead.position = SIMD3(
+                0.01,
+                0.07 + cos(a) * 0.032,
+                sin(a) * 0.032
+            )
+            flameRoot.addChild(bead)
+        }
 
         let bezel = ModelEntity(
             mesh: .generateSphere(radius: 0.034),
@@ -850,9 +1508,9 @@ enum MandalaBuilder {
 
     /// Visual style for offering heaps 2–37 (Mount Meru / centerpiece stay special).
     enum OfferingMoundStyle {
-        /// Continents/subcontinents (2–13): beige rice pile.
+        /// Continents/subcontinents (2–13): colorful grain mound (randomized jewel tints).
         case rice
-        /// Precious mountain/tree/cow/harvest (14–17): rice with jewel accents.
+        /// Precious mountain/tree/cow/harvest (14–17): grains with jewel accents.
         case mixedOffering
         /// Treasures/emblems (18–25): colorful gem pile.
         case crystal
@@ -872,6 +1530,24 @@ enum MandalaBuilder {
             }
         }
     }
+
+    /// Saturated jewel / pigment pool for per-heap random color mixes.
+    private static let jewelColorPool: [UIColor] = [
+        UIColor(red: 0.92, green: 0.72, blue: 0.18, alpha: 1), // gold
+        UIColor(red: 0.18, green: 0.72, blue: 0.68, alpha: 1), // turquoise
+        UIColor(red: 0.90, green: 0.38, blue: 0.32, alpha: 1), // coral
+        UIColor(red: 0.96, green: 0.94, blue: 0.90, alpha: 1), // pearl
+        UIColor(red: 0.24, green: 0.68, blue: 0.42, alpha: 1), // jade
+        UIColor(red: 0.88, green: 0.52, blue: 0.12, alpha: 1), // amber
+        UIColor(red: 0.72, green: 0.14, blue: 0.22, alpha: 1), // ruby
+        UIColor(red: 0.20, green: 0.38, blue: 0.86, alpha: 1), // sapphire
+        UIColor(red: 0.58, green: 0.32, blue: 0.78, alpha: 1), // amethyst
+        UIColor(red: 0.12, green: 0.58, blue: 0.48, alpha: 1), // emerald
+        UIColor(red: 0.86, green: 0.62, blue: 0.72, alpha: 1), // rose
+        UIColor(red: 0.95, green: 0.82, blue: 0.42, alpha: 1), // yellow grain
+        UIColor(red: 0.78, green: 0.28, blue: 0.48, alpha: 1), // magenta
+        UIColor(red: 0.35, green: 0.62, blue: 0.88, alpha: 1)  // sky lapis
+    ]
 
     /// Fuller sector mounds: more fine grains baked into a few meshes.
     private static let riceParticleTarget = 140
@@ -995,6 +1671,66 @@ enum MandalaBuilder {
         return target - span + Int(rng.next() % UInt64(span * 2 + 1))
     }
 
+    /// Per-heap random color mix: preferred tint + shuffled jewel accents (seeded by heap #).
+    private static func randomizedHeapPalette(
+        preferred: HeapMaterialKind,
+        heapNumber: Int,
+        rng: inout SeededRNG,
+        grainLike: Bool
+    ) -> (grains: [SimpleMaterial], gems: [any Material], bulk: SimpleMaterial) {
+        var colors: [UIColor] = [preferred.tint]
+        // Each heap picks a different subset so neighboring mounds don't match.
+        let accentCount = 4 + Int(rng.next() % 3) // 4…6
+        var pool = jewelColorPool
+        for i in stride(from: pool.count - 1, through: 1, by: -1) {
+            let j = Int(rng.next() % UInt64(i + 1))
+            pool.swapAt(i, j)
+        }
+        for color in pool.prefix(accentCount) {
+            // Mild per-heap hue jitter so repeats still read unique.
+            var r: CGFloat = 0, g: CGFloat = 0, b: CGFloat = 0, a: CGFloat = 0
+            color.getRed(&r, green: &g, blue: &b, alpha: &a)
+            let jitter = CGFloat(rng.range(-0.06, 0.06))
+            colors.append(UIColor(
+                red: min(1, max(0, r + jitter)),
+                green: min(1, max(0, g + jitter * 0.7)),
+                blue: min(1, max(0, b - jitter * 0.5)),
+                alpha: 1
+            ))
+        }
+
+        let grains: [SimpleMaterial] = colors.map { color in
+            var mat = SimpleMaterial()
+            mat.color = .init(tint: color)
+            if grainLike {
+                mat.metallic = .float(rng.range(0.04, 0.22))
+                mat.roughness = .float(rng.range(0.62, 0.88))
+            } else {
+                mat.metallic = .float(rng.range(0.45, 0.88))
+                mat.roughness = .float(rng.range(0.16, 0.38))
+            }
+            return mat
+        }
+
+        let gems: [any Material] = colors.enumerated().map { index, color in
+            if index % 3 == 2 {
+                return UnlitMaterial(color: color)
+            }
+            var mat = SimpleMaterial()
+            mat.color = .init(tint: color)
+            mat.metallic = .float(0.78)
+            mat.roughness = .float(0.18)
+            return mat
+        }
+
+        var bulk = SimpleMaterial()
+        bulk.color = .init(tint: colors[Int(rng.next() % UInt64(colors.count))])
+        bulk.metallic = .float(grainLike ? 0.08 : 0.55)
+        bulk.roughness = .float(grainLike ? 0.82 : 0.32)
+        _ = heapNumber // seed already folded into rng
+        return (grains, gems, bulk)
+    }
+
     /// Procedural offering mound (rice and/or crystals) for heaps 2–37.
     static func makeHeap(kind: HeapMaterialKind, scale: Float, heapNumber: Int) -> Entity {
         let style = OfferingMoundStyle.forHeapNumber(heapNumber)
@@ -1008,26 +1744,40 @@ enum MandalaBuilder {
             jitter: isRiceStyle ? riceParticleJitter : crystalParticleJitter,
             rng: &rng
         )
+        let palette = randomizedHeapPalette(
+            preferred: kind,
+            heapNumber: heapNumber,
+            rng: &rng,
+            grainLike: isRiceStyle
+        )
 
         switch style {
         case .rice:
-            addRiceGrains(to: root, count: total, scale: scale, materials: riceMaterials, rng: &rng)
+            addRiceGrains(
+                to: root,
+                count: total,
+                scale: scale,
+                materials: palette.grains,
+                bulkMaterial: palette.bulk,
+                rng: &rng
+            )
         case .mixedOffering:
-            // Mostly rice with a few jewel accents.
-            let jewelCount = min(8, max(5, total / 10))
+            // Mostly colored grains with a few jewel accents.
+            let jewelCount = min(14, max(8, total / 8))
             let grainCount = total - jewelCount
             addRiceGrains(
                 to: root,
                 count: grainCount,
                 scale: scale,
-                materials: mixedGrainMaterialsByKind[kind] ?? riceMaterials,
+                materials: palette.grains,
+                bulkMaterial: palette.bulk,
                 rng: &rng
             )
             addCrystalGems(
                 to: root,
                 count: jewelCount,
                 scale: scale * 1.05,
-                materials: [material(for: kind)] + crystalGemMaterials,
+                materials: palette.gems,
                 rng: &rng,
                 sizeRange: (0.0024, 0.0038),
                 addBulkDome: false
@@ -1037,7 +1787,7 @@ enum MandalaBuilder {
                 to: root,
                 count: total,
                 scale: scale,
-                materials: [material(for: kind)] + crystalGemMaterials,
+                materials: palette.gems,
                 rng: &rng,
                 sizeRange: (0.0022, 0.0036)
             )
@@ -1046,7 +1796,7 @@ enum MandalaBuilder {
                 to: root,
                 count: total,
                 scale: scale,
-                materials: pastelGemMaterials + [material(for: kind)],
+                materials: pastelGemMaterials + palette.gems,
                 rng: &rng,
                 sizeRange: (0.0020, 0.0034)
             )
@@ -1057,7 +1807,7 @@ enum MandalaBuilder {
                 to: root,
                 count: total,
                 scale: scale,
-                materials: [accent, bright] + crystalGemMaterials,
+                materials: [accent, bright] + palette.gems,
                 rng: &rng,
                 sizeRange: (0.0022, 0.0036),
                 preferPrimaryMaterial: true
@@ -1145,6 +1895,7 @@ enum MandalaBuilder {
         count: Int,
         scale: Float,
         materials: [SimpleMaterial],
+        bulkMaterial: SimpleMaterial? = nil,
         rng: inout SeededRNG
     ) {
         // Wide overflowing footprint so each offering fills more of its sector.
@@ -1157,7 +1908,7 @@ enum MandalaBuilder {
             name: "MoundBulk_rice",
             radius: baseRadius * 0.92,
             height: moundHeight * 0.88,
-            material: riceBulkMaterial
+            material: bulkMaterial ?? materials[0]
         )
 
         // Bake fine grains into a few tint meshes (simple + readable).
