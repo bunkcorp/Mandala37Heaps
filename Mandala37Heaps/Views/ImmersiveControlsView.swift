@@ -78,53 +78,45 @@ struct ImmersiveControlsView: View {
                 }
 
                 if appModel.solverMode == .mpmActive {
-                    HStack(spacing: 10) {
-                        Button(appModel.isIdentifying ? "Stop ID" : "Fit ID") {
+                    HStack(spacing: 6) {
+                        compactControlButton(appModel.isIdentifying ? "Stop ID" : "Fit ID") {
                             appModel.setIdentifying(!appModel.isIdentifying)
                         }
-                        .buttonStyle(.bordered)
                         .disabled(appModel.solverMode != .mpmActive)
 
-                        Button("Target") {
+                        compactControlButton("Target") {
                             appModel.captureIdentificationTarget()
                         }
-                        .buttonStyle(.bordered)
 
-                        Button("Teacher") {
+                        compactControlButton("Teacher") {
                             appModel.captureSyntheticTeacherTarget()
                         }
-                        .buttonStyle(.bordered)
 
-                        Button(appModel.showUncertaintyBands ? "Hide σ" : "Show σ") {
+                        compactControlButton(appModel.showUncertaintyBands ? "Hide σ" : "Show σ") {
                             appModel.setUncertaintyBandsVisible(!appModel.showUncertaintyBands)
                         }
-                        .buttonStyle(.bordered)
                     }
 
-                    HStack(spacing: 10) {
-                        Button(appModel.isAdaptivityEnabled ? "Adapt Off" : "Adapt On") {
+                    HStack(spacing: 6) {
+                        compactControlButton(appModel.isAdaptivityEnabled ? "Adapt Off" : "Adapt On") {
                             appModel.setAdaptivityEnabled(!appModel.isAdaptivityEnabled)
                         }
-                        .buttonStyle(.bordered)
 
-                        Button(appModel.showAdaptivityHeatmap ? "Hide e" : "Show e") {
+                        compactControlButton(appModel.showAdaptivityHeatmap ? "Hide e" : "Show e") {
                             appModel.setAdaptivityHeatmapVisible(!appModel.showAdaptivityHeatmap)
                         }
-                        .buttonStyle(.bordered)
 
-                        Button(appModel.isNeuralResidualEnabled ? "Neural Off" : "Neural On") {
+                        compactControlButton(appModel.isNeuralResidualEnabled ? "Neural Off" : "Neural On") {
                             appModel.setNeuralResidualEnabled(!appModel.isNeuralResidualEnabled)
                         }
-                        .buttonStyle(.bordered)
 
-                        Button(appModel.showNeuralResidualSurface ? "Hide δh" : "Show δh") {
+                        compactControlButton(appModel.showNeuralResidualSurface ? "Hide δh" : "Show δh") {
                             appModel.setNeuralResidualSurfaceVisible(!appModel.showNeuralResidualSurface)
                         }
-                        .buttonStyle(.bordered)
                     }
                 }
 
-                HStack(spacing: 12) {
+                HStack(spacing: 10) {
                     Button(
                         appModel.isAutoPlaying ? "Stop" : "Play",
                         systemImage: appModel.isAutoPlaying ? "stop.fill" : "play.fill"
@@ -132,6 +124,8 @@ struct ImmersiveControlsView: View {
                         appModel.toggleAutoPlay()
                     }
                     .buttonStyle(.bordered)
+                    .controlSize(.small)
+                    .font(.caption.weight(.semibold))
                     .disabled(appModel.isComplete && !appModel.isAutoPlaying)
                     .accessibilityLabel(appModel.isAutoPlaying ? "Stop autoplay" : "Play remaining heaps")
 
@@ -139,6 +133,8 @@ struct ImmersiveControlsView: View {
                         appModel.resetMandala()
                     }
                     .buttonStyle(.bordered)
+                    .controlSize(.small)
+                    .font(.caption.weight(.semibold))
 
                     Spacer(minLength: 0)
 
@@ -147,6 +143,8 @@ struct ImmersiveControlsView: View {
                     }
                     .buttonStyle(.borderedProminent)
                     .buttonBorderShape(.capsule)
+                    .controlSize(.small)
+                    .font(.caption.weight(.semibold))
                 }
             }
         }
@@ -154,5 +152,18 @@ struct ImmersiveControlsView: View {
         .padding(.vertical, 16)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+    }
+
+    /// Small single-line research control so labels like "Teacher" don't wrap.
+    private func compactControlButton(_ title: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Text(title)
+                .font(.caption2.weight(.semibold))
+                .lineLimit(1)
+                .minimumScaleFactor(0.7)
+                .frame(maxWidth: .infinity)
+        }
+        .buttonStyle(.bordered)
+        .controlSize(.mini)
     }
 }

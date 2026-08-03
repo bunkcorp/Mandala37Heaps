@@ -107,6 +107,22 @@ enum MandalaTier: Int, CaseIterable, Identifiable {
     var next: MandalaTier? {
         MandalaTier(rawValue: rawValue + 1)
     }
+    /// Usable deck between this ring wall and the next smaller ring (or center).
+    var heapAnnulusInner: Float {
+        if let next = MandalaTier(rawValue: rawValue + 1) {
+            return next.ringRadius + 0.016
+        }
+        return 0.035
+    }
+
+    var heapAnnulusOuter: Float {
+        max(heapAnnulusInner + 0.02, ringRadius - 0.022)
+    }
+
+    var heapAnnulusWidth: Float { heapAnnulusOuter - heapAnnulusInner }
+
+    /// Max mound radius that still fits inside the annulus with margin.
+    var maxHeapFootprintRadius: Float { heapAnnulusWidth * 0.32 }
 }
 
 /// Traditional Tibetan 37-heap mandala offering definitions and tiered layout.
@@ -116,10 +132,13 @@ struct HeapDefinition {
     let name: String
     let preferredMaterial: HeapMaterialKind
     let tier: MandalaTier
-    /// Polar radius as a fraction of the tier's deck radius (0…1).
+    /// 0…1 across the tier annulus (0 = against inner wall, 1 = against outer rim).
+    /// For universe inner-cross heaps (14–17), 0…1 across the center disk under the next ring.
     let radiusFraction: Float
     let angleDegrees: Float
     let heapScale: Float
+    /// When true, place in the center disk inside the next ring instead of the outer annulus.
+    let usesInnerDisk: Bool
 
     /// Canonical 37 heaps in offering order, assigned to stacked tiers.
     static let all: [HeapDefinition] = {
@@ -128,7 +147,8 @@ struct HeapDefinition {
         // —— Tier 0 / first ring: Meru, continents, subcontinents, four treasures (1–17) ——
         items.append(HeapDefinition(
             number: 1, name: "Mount Meru", preferredMaterial: .gold,
-            tier: .universe, radiusFraction: 0, angleDegrees: 0, heapScale: 1.00
+            tier: .universe, radiusFraction: 0, angleDegrees: 0, heapScale: 0.55,
+            usesInnerDisk: true
         ))
 
         // Outer rim continents — East at bottom (90°).
@@ -141,106 +161,130 @@ struct HeapDefinition {
         for (i, c) in continents.enumerated() {
             items.append(HeapDefinition(
                 number: 2 + i, name: c.0, preferredMaterial: c.1,
-                tier: .universe, radiusFraction: 0.62, angleDegrees: c.2, heapScale: 0.88
+                tier: .universe, radiusFraction: 0.42, angleDegrees: c.2, heapScale: 0.85,
+                usesInnerDisk: false
             ))
         }
 
         // Subcontinents flanking each continent (outer rim).
-        // East(2): left 6 / right 7; Left(3): above 8 / below 9;
-        // Top(4): left 11 / right 10; Right(5): above 13 / below 12.
         let subs: [(String, Float)] = [
-            ("East Subcontinent A", 112),   // 6 left flank of east
-            ("East Subcontinent B", 68),    // 7 right flank of east
-            ("South Subcontinent A", 202),  // 8 above left continent
-            ("South Subcontinent B", 158),  // 9 below left continent
-            ("West Subcontinent A", 292),   // 10 right flank of top
-            ("West Subcontinent B", 248),   // 11 left flank of top
-            ("North Subcontinent A", 22),   // 12 below right continent
-            ("North Subcontinent B", 338)   // 13 above right continent
+            ("East Subcontinent A", 112),
+            ("East Subcontinent B", 68),
+            ("South Subcontinent A", 202),
+            ("South Subcontinent B", 158),
+            ("West Subcontinent A", 292),
+            ("West Subcontinent B", 248),
+            ("North Subcontinent A", 22),
+            ("North Subcontinent B", 338)
         ]
         for (i, s) in subs.enumerated() {
             items.append(HeapDefinition(
                 number: 6 + i, name: s.0, preferredMaterial: .grain,
-                tier: .universe, radiusFraction: 0.90, angleDegrees: s.1, heapScale: 0.72
+                tier: .universe, radiusFraction: 0.78, angleDegrees: s.1, heapScale: 0.65,
+                usesInnerDisk: false
             ))
         }
 
-        // Inner cross between Meru and outer rim (still on base ring).
+        // Inner cross between Meru and outer rim (still on base ring, inside next ring).
         let innerCross: [(String, HeapMaterialKind, Float)] = [
-            ("Jewel Mountain", .gold, 90),                 // 14 bottom (east)
-            ("Wish-Fulfilling Tree", .jade, 180),          // 15 left
-            ("Wish-Fulfilling Cow", .pearl, 270),          // 16 top
-            ("Harvest That Needs No Cultivation", .grain, 0) // 17 right
+            ("Jewel Mountain", .gold, 90),
+            ("Wish-Fulfilling Tree", .jade, 180),
+            ("Wish-Fulfilling Cow", .pearl, 270),
+            ("Harvest That Needs No Cultivation", .grain, 0)
         ]
         for (i, t) in innerCross.enumerated() {
             items.append(HeapDefinition(
                 number: 14 + i, name: t.0, preferredMaterial: t.1,
-                tier: .universe, radiusFraction: 0.32, angleDegrees: t.2, heapScale: 0.78
+                tier: .universe, radiusFraction: 0.55, angleDegrees: t.2, heapScale: 0.70,
+                usesInnerDisk: true
             ))
         }
 
         // —— Tier 1 / second ring: royal emblems + vase (18–25) ——
         let emblems: [(String, HeapMaterialKind, Float)] = [
-            ("Precious Wheel", .gold, 90),        // 18 bottom
-            ("Precious Jewel", .turquoise, 180),  // 19 left
-            ("Precious Queen", .coral, 270),      // 20 top
-            ("Precious Minister", .pearl, 0),     // 21 right
-            ("Precious Elephant", .jade, 135),    // 22 BL
-            ("Precious Horse", .grain, 225),      // 23 TL
-            ("Precious General", .gold, 315),     // 24 TR
-            ("Great Treasure Vase", .turquoise, 45) // 25 BR
+            ("Precious Wheel", .gold, 90),
+            ("Precious Jewel", .turquoise, 180),
+            ("Precious Queen", .coral, 270),
+            ("Precious Minister", .pearl, 0),
+            ("Precious Elephant", .jade, 135),
+            ("Precious Horse", .grain, 225),
+            ("Precious General", .gold, 315),
+            ("Great Treasure Vase", .turquoise, 45)
         ]
         for (i, e) in emblems.enumerated() {
             items.append(HeapDefinition(
                 number: 18 + i, name: e.0, preferredMaterial: e.1,
-                tier: .treasures, radiusFraction: 0.70, angleDegrees: e.2, heapScale: 0.68
+                tier: .treasures, radiusFraction: 0.48, angleDegrees: e.2, heapScale: 0.80,
+                usesInnerDisk: false
             ))
         }
 
         // —— Tier 2 / third ring: eight offering goddesses (26–33) ——
         let goddesses: [(String, HeapMaterialKind, Float)] = [
-            ("Goddess of Beauty", .coral, 90),       // 26 bottom
-            ("Goddess of Garlands", .pearl, 180),    // 27 left
-            ("Goddess of Song", .turquoise, 270),    // 28 top
-            ("Goddess of Dance", .jade, 0),          // 29 right
-            ("Goddess of Flowers", .coral, 135),     // 30 BL
-            ("Goddess of Incense", .grain, 225),     // 31 TL
-            ("Goddess of Light", .gold, 315),        // 32 TR
-            ("Goddess of Perfume", .pearl, 45)       // 33 BR
+            ("Goddess of Beauty", .coral, 90),
+            ("Goddess of Garlands", .pearl, 180),
+            ("Goddess of Song", .turquoise, 270),
+            ("Goddess of Dance", .jade, 0),
+            ("Goddess of Flowers", .coral, 135),
+            ("Goddess of Incense", .grain, 225),
+            ("Goddess of Light", .gold, 315),
+            ("Goddess of Perfume", .pearl, 45)
         ]
         for (i, g) in goddesses.enumerated() {
             items.append(HeapDefinition(
                 number: 26 + i, name: g.0, preferredMaterial: g.1,
-                tier: .goddesses, radiusFraction: 0.68, angleDegrees: g.2, heapScale: 0.62
+                tier: .goddesses, radiusFraction: 0.48, angleDegrees: g.2, heapScale: 0.78,
+                usesInnerDisk: false
             ))
         }
 
         // —— Tier 3 / top ring: sun, moon, parasol, victory banner (34–37) ——
-        // Centerpiece (38) is placed last in AppModel after all 37 heaps.
         let celestial: [(String, HeapMaterialKind, Float)] = [
-            ("Sun", .gold, 180),                 // 34 left
-            ("Moon", .pearl, 0),                 // 35 right
-            ("Precious Parasol", .turquoise, 270), // 36 top
-            ("Victory Banner", .coral, 90)       // 37 bottom (east)
+            ("Sun", .gold, 180),
+            ("Moon", .pearl, 0),
+            ("Precious Parasol", .turquoise, 270),
+            ("Victory Banner", .coral, 90)
         ]
         for (i, o) in celestial.enumerated() {
             items.append(HeapDefinition(
                 number: 34 + i, name: o.0, preferredMaterial: o.1,
-                tier: .celestial, radiusFraction: 0.68, angleDegrees: o.2, heapScale: 0.58
+                tier: .celestial, radiusFraction: 0.55, angleDegrees: o.2, heapScale: 0.72,
+                usesInnerDisk: false
             ))
         }
 
         precondition(items.count == 37)
-        // Offering order must stay 1…37 by number.
         precondition(items.map(\.number) == Array(1...37))
         return items
     }()
 
-    /// Local position on the tier's fill surface (y ≈ 0).
+    /// Local position on the tier's fill surface (y ≈ 0), constrained inside the ring deck.
     var localPosition: SIMD3<Float> {
         let rad = angleDegrees * .pi / 180
-        let r = radiusFraction * tier.deckRadius
+        let r: Float
+        if number == 1 {
+            r = 0
+        } else if usesInnerDisk {
+            let inner: Float = 0.07
+            let outer = max(inner + 0.02, tier.heapAnnulusInner - 0.012)
+            r = inner + (outer - inner) * min(1, max(0, radiusFraction))
+        } else {
+            let inner = tier.heapAnnulusInner
+            let outer = tier.heapAnnulusOuter
+            r = inner + (outer - inner) * min(1, max(0, radiusFraction))
+        }
         return SIMD3(r * cos(rad), 0, r * sin(rad))
+    }
+
+    /// Scale clamped so the mound footprint fits the ring annulus / inner disk.
+    var containedHeapScale: Float {
+        let maxR = usesInnerDisk
+            ? max(0.02, (tier.heapAnnulusInner - 0.08) * 0.35)
+            : tier.maxHeapFootprintRadius
+        // makeHeap uses ~0.058 * scale as footprint radius.
+        let nominalFootprint: Float = 0.058
+        let fit = maxR / nominalFootprint
+        return min(heapScale, fit)
     }
 }
 

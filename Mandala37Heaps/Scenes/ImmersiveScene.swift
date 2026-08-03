@@ -1,5 +1,6 @@
 import SwiftUI
 
+#if os(visionOS)
 struct ImmersiveScene: Scene {
     static let sceneID = "ImmersiveSpace"
 
@@ -10,3 +11,8 @@ struct ImmersiveScene: Scene {
         .immersionStyle(selection: .constant(.mixed), in: .mixed)
     }
 }
+#else
+enum ImmersiveScene {
+    static let sceneID = "ImmersiveSpace"
+}
+#endif

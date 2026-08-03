@@ -1573,7 +1573,7 @@ enum MandalaBuilder {
         let root = Entity()
         root.name = "Slot_\(definition.number)"
 
-        let markerRadius = 0.026 * definition.heapScale
+        let markerRadius = 0.018 * definition.containedHeapScale
         let diskMesh = MeshResource.generateCylinder(height: 0.004, radius: markerRadius)
         let diskMaterial: any Material
         if highlighted {
@@ -1990,8 +1990,8 @@ enum MandalaBuilder {
         }
 
         // Single trigger collider covering the larger bulge (paired for targeted gestures).
-        let hitRadius = 0.16 * scale
-        let hitHeight: Float = 0.15 * scale
+        let hitRadius = 0.07 * scale
+        let hitHeight: Float = 0.08 * scale
         let shape = ShapeResource.generateBox(size: SIMD3(hitRadius * 2, hitHeight, hitRadius * 2))
             .offsetBy(translation: SIMD3(0, hitHeight * 0.42, 0))
         root.components.set(CollisionComponent(shapes: [shape], mode: .trigger))
@@ -2076,8 +2076,9 @@ enum MandalaBuilder {
         rng: inout SeededRNG
     ) {
         // Wide overflowing footprint so each offering fills more of its sector.
-        let baseRadius = 0.145 * scale
-        let moundHeight = 0.125 * scale
+        // Keep radius well inside the metal ring annulus so mounds don't clip walls.
+        let baseRadius = 0.058 * scale
+        let moundHeight = 0.052 * scale
         guard !materials.isEmpty, count > 0 else { return }
 
         addBulkDome(
@@ -2114,7 +2115,7 @@ enum MandalaBuilder {
 
         for _ in 0..<scatterCount {
             let angle = rng.unit() * (.pi * 2)
-            let radial = rng.range(0.60, 1.65) * baseRadius
+            let radial = rng.range(0.55, 1.05) * baseRadius
             let center = SIMD3(cos(angle) * radial, rng.range(0.001, 0.008) * scale, sin(angle) * radial)
             let len = rng.range(0.0024, 0.0040) * scale
             let thick = len * rng.range(0.30, 0.42)
@@ -2159,8 +2160,8 @@ enum MandalaBuilder {
 
     /// Squashed dome carrying the animated Mandelbrot zoom texture (select heaps only).
     private static func addFractalShell(to root: Entity, scale: Float, heapNumber: Int) {
-        let radius = 0.125 * scale
-        let height = 0.110 * scale
+        let radius = 0.052 * scale
+        let height = 0.048 * scale
         let hue = CGFloat((heapNumber % 12)) / 12
         var mat = UnlitMaterial(
             color: UIColor(hue: hue, saturation: 0.75, brightness: 0.55, alpha: 1)
@@ -2286,8 +2287,8 @@ enum MandalaBuilder {
         preferPrimaryMaterial: Bool = false,
         addBulkDome: Bool = true
     ) {
-        let baseRadius = 0.130 * scale
-        let moundHeight = 0.115 * scale
+        let baseRadius = 0.052 * scale
+        let moundHeight = 0.048 * scale
         guard !materials.isEmpty, count > 0 else { return }
         let materialCount = materials.count
 
@@ -2349,7 +2350,7 @@ enum MandalaBuilder {
 
         for i in 0..<scatterCount {
             let angle = rng.unit() * (.pi * 2)
-            let radial = rng.range(0.60, 1.55) * baseRadius
+            let radial = rng.range(0.55, 1.05) * baseRadius
             let center = SIMD3(cos(angle) * radial, rng.range(0.001, 0.008) * scale, sin(angle) * radial)
             let r = rng.range(sizeRange.0, sizeRange.1) * scale * 0.9
             let half = SIMD3(r, r * rng.range(0.55, 0.8), r)
@@ -2449,14 +2450,15 @@ enum MandalaBuilder {
             UIColor(red: 0.85, green: 0.30, blue: 0.95, alpha: 0.95)  // violet
         ]
 
-        // Soft ground glow disc.
+        // Soft ground glow disc — kept tiny; pulse animation scales it within the mound.
         let glow = ModelEntity(
-            mesh: .generateSphere(radius: 0.055),
-            materials: [UnlitMaterial(color: UIColor(white: 1, alpha: 0.22))]
+            mesh: .generateSphere(radius: 0.028),
+            materials: [UnlitMaterial(color: UIColor(white: 1, alpha: 0.18))]
         )
         glow.name = "BounceGlow"
-        glow.scale = SIMD3(1.4, 0.18, 1.4)
-        glow.position = SIMD3(0, 0.008, 0)
+        glow.scale = SIMD3(0.22, 0.10, 0.22)
+        glow.position = SIMD3(0, 0.004, 0)
+        glow.isEnabled = false
         root.addChild(glow)
 
         // Rising rainbow sparklets (hidden until bounce pulse).

@@ -1,8 +1,11 @@
-import ARKit
 import Foundation
 import RealityKit
 import simd
 import UIKit
+
+#if os(visionOS)
+import ARKit
+#endif
 
 /// Tracks a ritual scoop: right-hand phalanx capsules when available, else a draggable tool.
 @MainActor
@@ -14,8 +17,10 @@ final class RitualToolTracker {
     /// Latest mandala-local contact capsules (scoop or finger phalanges).
     private(set) var mandalaCapsules: [MPMCapsuleSDF] = []
 
+#if os(visionOS)
     private let session = ARKitSession()
     private let handTracking = HandTrackingProvider()
+#endif
     private var handTask: Task<Void, Never>?
     private var mandalaRoot: Entity?
 
@@ -48,7 +53,9 @@ final class RitualToolTracker {
         let shape = ShapeResource.generateSphere(radius: 0.04)
         toolEntity.components.set(CollisionComponent(shapes: [shape]))
         toolEntity.components.set(InputTargetComponent())
+#if os(visionOS)
         toolEntity.components.set(HoverEffectComponent())
+#endif
 
         // Rest pose near the palette.
         toolEntity.position = SIMD3(0.28, 0.02, 0.52)
@@ -59,6 +66,7 @@ final class RitualToolTracker {
     }
 
     func startHandTracking() {
+#if os(visionOS)
         handTask?.cancel()
         handTask = Task { @MainActor in
             guard HandTrackingProvider.isSupported else {
@@ -101,6 +109,11 @@ final class RitualToolTracker {
                 print("[RitualTool] hand tracking unavailable: \(error)")
             }
         }
+#else
+        // iOS: drag the scoop with touch; no hand skeleton tracking.
+        isTrackingHand = false
+        refreshScoopCapsule()
+#endif
     }
 
     func stop() {
@@ -156,6 +169,7 @@ final class RitualToolTracker {
         )
     }
 
+#if os(visionOS)
     private static func phalanxCapsules(
         skeleton: HandSkeleton,
         anchor: HandAnchor,
@@ -194,4 +208,5 @@ final class RitualToolTracker {
         let t = anchor.originFromAnchorTransform * joint.anchorFromJointTransform
         return SIMD3(t.columns.3.x, t.columns.3.y, t.columns.3.z)
     }
+#endif
 }

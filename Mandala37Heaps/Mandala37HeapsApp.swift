@@ -4,9 +4,11 @@ import SwiftUI
 struct Mandala37HeapsApp: App {
     @State private var appModel = AppModel()
 
+#if os(visionOS)
     @Environment(\.dismissImmersiveSpace) private var dismissImmersiveSpace
     @Environment(\.openImmersiveSpace) private var openImmersiveSpace
     @Environment(\.openWindow) private var openWindow
+#endif
     @Environment(\.scenePhase) private var scenePhase
 
     init() {
@@ -17,39 +19,48 @@ struct Mandala37HeapsApp: App {
     }
 
     var body: some Scene {
-        makeVisionScenes()
-            .environment(appModel)
-            .onChange(of: appModel.viewState) { _, toState in
-                Task { @MainActor in
-                    switch toState {
-                    case .immersive:
-                        await enterImmersivePresentation()
-                    case .portal:
-                        await exitImmersivePresentation()
-                    }
+        WindowGroup(id: ContentWindow.sceneID) {
+            ContentView()
+        }
+#if os(visionOS)
+        .windowStyle(.plain)
+        .defaultSize(width: 560, height: 640)
+#endif
+        .environment(appModel)
+        .onChange(of: appModel.viewState) { _, toState in
+            Task { @MainActor in
+                switch toState {
+                case .immersive:
+#if os(visionOS)
+                    await enterImmersivePresentation()
+#endif
+                case .portal:
+#if os(visionOS)
+                    await exitImmersivePresentation()
+#endif
+                    break
                 }
             }
-            .onChange(of: scenePhase) { _, newPhase in
-                if newPhase == .background {
-                    appModel.handleBackground()
-                }
+        }
+        .onChange(of: scenePhase) { _, newPhase in
+            if newPhase == .background {
+                appModel.handleBackground()
             }
-    }
+        }
 
-    @SceneBuilder
-    private func makeVisionScenes() -> some Scene {
-        ContentWindow()
+#if os(visionOS)
         ImmersiveScene()
+            .environment(appModel)
+#endif
     }
 
+#if os(visionOS)
     private func enterImmersivePresentation() async {
         guard appModel.immersiveSpaceState == .closed else { return }
         appModel.immersiveSpaceState = .inTransition
         switch await openImmersiveSpace(id: ImmersiveScene.sceneID) {
         case .opened:
             appModel.immersiveSpaceState = .open
-            // Keep ContentWindow open for gameplay controls — ornaments are not
-            // supported inside ImmersiveSpace.
         case .userCancelled, .error:
             fallthrough
         @unknown default:
@@ -65,4 +76,5 @@ struct Mandala37HeapsApp: App {
         appModel.immersiveSpaceState = .closed
         openWindow(id: ContentWindow.sceneID)
     }
+#endif
 }

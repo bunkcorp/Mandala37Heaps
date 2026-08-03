@@ -1,3 +1,4 @@
+#if os(visionOS)
 import RealityKit
 import SwiftUI
 
@@ -8,6 +9,7 @@ struct ImmersiveView: View {
     var body: some View {
         RealityView { content in
             appModel.prepareMandalaIfNeeded()
+            appModel.applyPlatformPresentation()
             if appModel.mandalaRoot.parent == nil {
                 content.add(appModel.mandalaRoot)
             }
@@ -33,7 +35,6 @@ struct ImmersiveView: View {
                         toolDragStart = appModel.ritualTool.toolEntity.position
                     }
                     let start = toolDragStart ?? .zero
-                    // Map screen drag into a gentle mandala-local slide on the XZ plane.
                     let dx = Float(value.translation3D.x) * 0.0015
                     let dy = Float(value.translation3D.y) * 0.0012
                     let dz = Float(value.translation3D.z) * 0.0015
@@ -53,7 +54,6 @@ struct ImmersiveView: View {
             appModel.didRunDebugGameplay = true
             try? await Task.sleep(for: .seconds(2))
             if arguments.contains("-autoPlay") {
-                // Use gameplay autoplay (no post-run reset) so stacked rings stay visible.
                 appModel.startAutoPlay()
             } else {
                 await appModel.debugPlaceDemoHeaps()
@@ -62,3 +62,4 @@ struct ImmersiveView: View {
 #endif
     }
 }
+#endif

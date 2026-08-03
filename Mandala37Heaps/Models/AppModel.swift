@@ -34,7 +34,7 @@ final class AppModel {
     var solverMode: SolverMode = .mpmActive
     /// Latest conservation / contact diagnostics (MPM path).
     var diagnosticsHUD: String = "Solver: MPM"
-    var showDiagnosticsHUD: Bool = true
+    var showDiagnosticsHUD: Bool = false
     /// Phase 2 online constitutive identification (FD Adam).
     var isIdentifying: Bool = false
     var identificationHUD: String = "ID idle"
@@ -293,26 +293,23 @@ final class AppModel {
             }
             let p = heapBouncePulse[index]
 
-            // Land shake: high-frequency jitter that dies with the pulse.
+            // Soft land motion — keep it small so mounds stay inside the ring walls.
             let shakeAmp = p * p
-            let shakeX = sin(t * 48 + phase * 9) * 0.0045 * shakeAmp
-            let shakeZ = cos(t * 41 + phase * 7) * 0.0045 * shakeAmp
-            let shakeY = abs(sin(t * 55 + phase)) * 0.0022 * shakeAmp
+            let shakeX = sin(t * 48 + phase * 9) * 0.0012 * shakeAmp
+            let shakeZ = cos(t * 41 + phase * 7) * 0.0012 * shakeAmp
+            let shakeY = abs(sin(t * 55 + phase)) * 0.0010 * shakeAmp
 
-            // Land tumble / spin: fast yaw + roll/pitch wobble on impact.
-            let spinYaw = sway + sin(t * 22 + phase) * 0.55 * shakeAmp
-                + cos(t * 9 + phase * 2) * 0.28 * p
-            let spinPitch = tip + sin(t * 31 + phase * 1.4) * 0.32 * shakeAmp
-            let spinRoll = cos(t * 27 + phase * 0.7) * 0.38 * shakeAmp
+            let spinYaw = sway * 0.45 + sin(t * 22 + phase) * 0.18 * shakeAmp
+            let spinPitch = tip * 0.45 + sin(t * 31 + phase * 1.4) * 0.10 * shakeAmp
+            let spinRoll = cos(t * 27 + phase * 0.7) * 0.12 * shakeAmp
 
             heap.position = SIMD3(shakeX, baseY + bob + shakeY, shakeZ)
             heap.orientation =
                 simd_quatf(angle: spinYaw, axis: SIMD3(0, 1, 0)) *
                 simd_quatf(angle: spinPitch, axis: SIMD3(1, 0, 0)) *
                 simd_quatf(angle: spinRoll, axis: SIMD3(0, 0, 1))
-            // Squash slightly on land, then spring back with breathe.
-            let squash = 1 - 0.08 * shakeAmp
-            let stretch = 1 + 0.10 * shakeAmp
+            let squash = 1 - 0.05 * shakeAmp
+            let stretch = 1 + 0.04 * shakeAmp
             heap.scale = SIMD3(breathe * stretch, breathe * squash, breathe * stretch)
 
             updateHeapBounceAura(on: heap, index: index, pulse: p, time: t)
@@ -322,15 +319,15 @@ final class AppModel {
     private func updateHeapBounceAura(on heap: Entity, index: Int, pulse: Float, time: Float) {
         guard let aura = heap.findEntity(named: "HeapBounceAura") else { return }
         let p = max(0, min(1, pulse))
-        let idleShimmer = 0.15 + 0.08 * sin(time * 2.4 + Float(index))
 
         if let glow = aura.findEntity(named: "BounceGlow") {
-            let g = 0.55 + p * 1.8 + idleShimmer
-            glow.scale = SIMD3(1.2 + p * 0.9, 0.16 + p * 0.2, 1.2 + p * 0.9)
-            // Brightness via uniform scale + slight lift.
-            glow.position = SIMD3(0, 0.008 + p * 0.01, 0)
+            // Keep glow smaller than the mound so it never spills past the ring wall.
+            let s = 0.22 + p * 0.28
+            glow.scale = SIMD3(s, 0.10, s)
+            glow.position = SIMD3(0, 0.004, 0)
+            glow.isEnabled = p > 0.04
             if let model = glow as? ModelEntity {
-                let alpha = CGFloat(0.12 + p * 0.55 + idleShimmer * 0.2)
+                let alpha = CGFloat(0.15 + p * 0.45)
                 let hue = CGFloat((time * 0.35 + Float(index) * 0.11).truncatingRemainder(dividingBy: 1))
                 model.model?.materials = [
                     UnlitMaterial(color: UIColor(hue: hue, saturation: 0.75, brightness: 1, alpha: alpha))
@@ -342,21 +339,20 @@ final class AppModel {
            var light = lightAnchor.components[PointLightComponent.self] {
             let hue = CGFloat((time * 0.4 + Float(index) * 0.13).truncatingRemainder(dividingBy: 1))
             light.color = UIColor(hue: hue, saturation: 0.65, brightness: 1, alpha: 1)
-            light.intensity = 60 + p * 1400
-            light.attenuationRadius = 0.28 + p * 0.45
+            light.intensity = p > 0.04 ? (80 + p * 600) : 0
+            light.attenuationRadius = 0.12 + p * 0.18
             lightAnchor.components.set(light)
-            lightAnchor.position = SIMD3(0, 0.05 + p * 0.08, 0)
+            lightAnchor.position = SIMD3(0, 0.03 + p * 0.03, 0)
         }
 
         if let sparks = aura.findEntity(named: "BounceSparks") {
             let children = Array(sparks.children)
             for (i, spark) in children.enumerated() {
                 let angle = Float(i) * (.pi * 2 / Float(max(1, children.count))) + time * 0.8
-                let rise = p * (0.04 + Float(i % 4) * 0.018)
-                let radial = 0.015 + p * (0.04 + Float(i % 3) * 0.012)
-                spark.position = SIMD3(cos(angle) * radial, 0.015 + rise, sin(angle) * radial)
-                let s = p * (0.7 + Float(i % 3) * 0.25)
-                spark.scale = SIMD3(repeating: s)
+                let rise = p * (0.015 + Float(i % 4) * 0.008)
+                let radial = 0.008 + p * (0.012 + Float(i % 3) * 0.004)
+                spark.position = SIMD3(cos(angle) * radial, 0.008 + rise, sin(angle) * radial)
+                spark.scale = SIMD3(repeating: p * (0.45 + Float(i % 3) * 0.15))
             }
         }
 
@@ -364,12 +360,12 @@ final class AppModel {
             let children = Array(arcs.children)
             for (i, arc) in children.enumerated() {
                 let angle = Float(i) * (.pi / 3) + time * 0.5
-                let lift = p * (0.04 + Float(i % 2) * 0.02)
-                arc.position = SIMD3(cos(angle) * (0.02 + p * 0.05), 0.02 + lift, sin(angle) * (0.02 + p * 0.05))
+                let lift = p * (0.015 + Float(i % 2) * 0.008)
+                arc.position = SIMD3(cos(angle) * (0.01 + p * 0.015), 0.01 + lift, sin(angle) * (0.01 + p * 0.015))
                 arc.orientation = simd_quatf(angle: angle, axis: SIMD3(0, 1, 0))
-                    * simd_quatf(angle: -0.35 - p * 0.55, axis: SIMD3(1, 0, 0))
-                let s = p * (0.6 + Float(i % 3) * 0.2)
-                arc.scale = SIMD3(s, s, 0.5 + p * 1.4)
+                    * simd_quatf(angle: -0.35 - p * 0.35, axis: SIMD3(1, 0, 0))
+                let s = p * (0.35 + Float(i % 3) * 0.1)
+                arc.scale = SIMD3(s, s, 0.35 + p * 0.55)
             }
         }
     }
@@ -688,12 +684,30 @@ final class AppModel {
 
     func enterMandala() {
         prepareMandalaIfNeeded()
+        applyPlatformPresentation()
         viewState = .immersive
+#if !os(visionOS)
+        immersiveSpaceState = .open
+#endif
     }
 
     func exitMandala() {
         stopAutoPlay()
         viewState = .portal
+#if !os(visionOS)
+        immersiveSpaceState = .closed
+#endif
+    }
+
+    /// Platform-specific seating of the mandala root (immersive room vs phone tabletop).
+    func applyPlatformPresentation() {
+#if os(iOS)
+        mandalaRoot.position = SIMD3(0, -0.08, -1.35)
+#else
+        mandalaRoot.position = SIMD3(0, 1.05, -0.78)
+        mandalaRoot.orientation = simd_quatf(angle: -0.22, axis: SIMD3(1, 0, 0))
+        mandalaRoot.scale = SIMD3(repeating: 1)
+#endif
     }
 
     func toggleAutoPlay() {
@@ -875,11 +889,11 @@ final class AppModel {
 
         let heap: Entity
         if definition.number == 1 {
-            heap = MandalaBuilder.makeMountMeru(scale: definition.heapScale)
+            heap = MandalaBuilder.makeMountMeru(scale: definition.containedHeapScale)
         } else {
             heap = MandalaBuilder.makeHeap(
                 kind: material,
-                scale: definition.heapScale,
+                scale: definition.containedHeapScale,
                 heapNumber: definition.number
             )
         }
@@ -1172,6 +1186,7 @@ final class AppModel {
 
         mandalaRoot.position = SIMD3(0, 1.05, -0.78)
         mandalaRoot.orientation = simd_quatf(angle: -0.22, axis: SIMD3(1, 0, 0))
+        applyPlatformPresentation()
 
         // Localized sim so gravity is "down" in mandala space (toward the plate).
         var simulation = PhysicsSimulationComponent()
