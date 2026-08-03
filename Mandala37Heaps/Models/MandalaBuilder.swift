@@ -4,15 +4,18 @@ import UIKit
 
 enum MandalaBuilder {
     /// Traditional square brocade table cover under the mandala (ground cloth).
-    /// Royal-blue outer field with Ashtamangala (eight auspicious symbols) in gold,
-    /// red + yellow borders, and a central triangle patchwork mosaic.
-    static func makeTableCover(size: Float = 1.18) -> Entity {
+    /// Wide royal-blue field so Ashtamangala sit outside the silver rings;
+    /// red + yellow borders and triangle mosaic stay under the plate.
+    static func makeTableCover(size: Float = 1.95) -> Entity {
         let root = Entity()
         root.name = "MandalaTableCover"
         // Sit just under the plate feet so the set rests on the cloth.
         root.position = SIMD3(0, -0.0015, 0)
 
         let clothY: Float = 0.0012
+        // Plate outer radius ≈ 0.56 — keep mosaic/frame under the set, symbols beyond it.
+        let plateClearance: Float = 0.62
+        let mosaicOuter: Float = 0.72
 
         // Outer royal-blue brocade field.
         var blueMat = SimpleMaterial()
@@ -20,68 +23,58 @@ enum MandalaBuilder {
         blueMat.roughness = .float(0.72)
         blueMat.metallic = .float(0.08)
         let outer = ModelEntity(
-            mesh: .generateBox(size: SIMD3(size, clothY, size), cornerRadius: 0.004),
+            mesh: .generateBox(size: SIMD3(size, clothY, size), cornerRadius: 0.006),
             materials: [blueMat]
         )
         outer.name = "CoverBlueField"
         outer.position = SIMD3(0, clothY * 0.5, 0)
         root.addChild(outer)
 
-        var motifGold = SimpleMaterial()
-        motifGold.color = .init(tint: UIColor(red: 0.86, green: 0.78, blue: 0.42, alpha: 1))
-        motifGold.metallic = .float(0.72)
-        motifGold.roughness = .float(0.38)
+        let motifGold = ashtaMat(.gold)
+        let motifSilver = ashtaMat(.pearl)
 
-        var motifSilver = SimpleMaterial()
-        motifSilver.color = .init(tint: UIColor(red: 0.82, green: 0.84, blue: 0.88, alpha: 1))
-        motifSilver.metallic = .float(0.65)
-        motifSilver.roughness = .float(0.42)
-
-        // Dense cloud / vine fill so the blue field reads as woven brocade.
+        // Dense cloud / vine fill on the visible blue margin.
         addCoverCloudFiligree(
             to: root,
             size: size,
             y: clothY + 0.0006,
             gold: motifGold,
-            silver: motifSilver
+            silver: motifSilver,
+            keepout: plateClearance * 0.92
         )
 
-        // Eight Auspicious Symbols around the blue margin (outside the central square).
+        // Eight Auspicious Symbols on the exposed blue margin (outside the rings).
         let symbols = AshtamangalaSymbol.allCases
-        let symbolRadius = size * 0.38
-        let mosaicKeepout = size * 0.28
+        let symbolRadius = (plateClearance + size * 0.5) * 0.52 // mid-margin ring
         for (i, symbol) in symbols.enumerated() {
             let angle = Float(i) * (.pi * 2 / Float(symbols.count)) - .pi / 2
             let x = cos(angle) * symbolRadius
             let z = sin(angle) * symbolRadius
-            // Skip if somehow under mosaic (safety).
-            if abs(x) < mosaicKeepout && abs(z) < mosaicKeepout { continue }
-            let glyph = makeAshtamangalaSymbol(symbol, gold: motifGold, silver: motifSilver)
+            let glyph = makeAshtamangalaSymbol(symbol)
             glyph.name = "Ashtamangala_\(symbol.rawValue)"
             glyph.position = SIMD3(x, clothY + 0.0010, z)
             glyph.orientation = simd_quatf(angle: -angle + .pi / 2, axis: SIMD3(0, 1, 0))
-            glyph.scale = SIMD3(repeating: 1.15)
+            glyph.scale = SIMD3(repeating: 1.55)
             root.addChild(glyph)
         }
 
-        // Smaller repeat of the eight symbols nearer the outer edge / corners.
-        let cornerRadius = size * 0.46
+        // Smaller repeat nearer the outer edge / corners.
+        let cornerRadius = size * 0.44
         for (i, symbol) in symbols.enumerated() {
             let angle = Float(i) * (.pi * 2 / Float(symbols.count)) - .pi / 2 + .pi / 8
             let x = cos(angle) * cornerRadius
             let z = sin(angle) * cornerRadius
-            let glyph = makeAshtamangalaSymbol(symbol, gold: motifGold, silver: motifSilver)
+            let glyph = makeAshtamangalaSymbol(symbol)
             glyph.name = "AshtamangalaMini_\(symbol.rawValue)"
             glyph.position = SIMD3(x, clothY + 0.0009, z)
             glyph.orientation = simd_quatf(angle: -angle + .pi / 2, axis: SIMD3(0, 1, 0))
-            glyph.scale = SIMD3(repeating: 0.72)
+            glyph.scale = SIMD3(repeating: 0.95)
             root.addChild(glyph)
         }
 
-        // Nested borders + central mosaic occupy the inner square.
-        let mosaicOuter = size * 0.52
-        let redBorderWidth = size * 0.045
-        let yellowBorderWidth = size * 0.038
+        // Nested borders + central mosaic sized to the plate, not the full cloth.
+        let redBorderWidth: Float = 0.055
+        let yellowBorderWidth: Float = 0.045
         let mosaicSize = mosaicOuter - 2 * (redBorderWidth + yellowBorderWidth)
 
         addCoverBorderFrame(
@@ -109,228 +102,397 @@ enum MandalaBuilder {
         return root
     }
 
-    /// Tibetan Eight Auspicious Symbols (Ashtamangala).
+    /// Tibetan Eight Auspicious Symbols (Ashtamangala) — colorful embroidered glyphs.
     private enum AshtamangalaSymbol: String, CaseIterable {
+        case dharmaWheel
         case parasol
-        case conch
+        case treasureVase
+        case lotus
+        case victoryBanner
         case fish
         case endlessKnot
-        case treasureVase
-        case victoryBanner
-        case lotus
-        case dharmaWheel
+        case conch
     }
 
-    private static func makeAshtamangalaSymbol(
-        _ symbol: AshtamangalaSymbol,
-        gold: SimpleMaterial,
-        silver: SimpleMaterial
-    ) -> Entity {
+    private enum AshtaColor {
+        case gold, blue, orange, red, green, yellow, pearl, maroon
+    }
+
+    private static func ashtaMat(_ color: AshtaColor) -> SimpleMaterial {
+        let tint: UIColor
+        let metallic: Float
+        switch color {
+        case .gold:
+            tint = UIColor(red: 0.92, green: 0.74, blue: 0.18, alpha: 1); metallic = 0.78
+        case .blue:
+            tint = UIColor(red: 0.18, green: 0.42, blue: 0.88, alpha: 1); metallic = 0.18
+        case .orange:
+            tint = UIColor(red: 0.95, green: 0.48, blue: 0.18, alpha: 1); metallic = 0.22
+        case .red:
+            tint = UIColor(red: 0.88, green: 0.16, blue: 0.18, alpha: 1); metallic = 0.15
+        case .green:
+            tint = UIColor(red: 0.18, green: 0.62, blue: 0.32, alpha: 1); metallic = 0.18
+        case .yellow:
+            tint = UIColor(red: 0.98, green: 0.86, blue: 0.22, alpha: 1); metallic = 0.35
+        case .pearl:
+            tint = UIColor(red: 0.96, green: 0.95, blue: 0.92, alpha: 1); metallic = 0.45
+        case .maroon:
+            tint = UIColor(red: 0.62, green: 0.10, blue: 0.18, alpha: 1); metallic = 0.12
+        }
+        var mat = SimpleMaterial()
+        mat.color = .init(tint: tint)
+        mat.metallic = .float(metallic)
+        mat.roughness = .float(0.42)
+        return mat
+    }
+
+    private static func makeAshtamangalaSymbol(_ symbol: AshtamangalaSymbol) -> Entity {
         switch symbol {
-        case .parasol: return makeSymbolParasol(gold: gold, silver: silver)
-        case .conch: return makeSymbolConch(gold: gold, silver: silver)
-        case .fish: return makeSymbolTwinFish(gold: gold)
-        case .endlessKnot: return makeSymbolEndlessKnot(gold: gold)
-        case .treasureVase: return makeSymbolTreasureVase(gold: gold, silver: silver)
-        case .victoryBanner: return makeSymbolVictoryBanner(gold: gold, silver: silver)
-        case .lotus: return makeSymbolLotus(gold: gold, silver: silver)
-        case .dharmaWheel: return makeSymbolDharmaWheel(gold: gold, silver: silver)
+        case .dharmaWheel: return makeSymbolDharmaWheel()
+        case .parasol: return makeSymbolParasol()
+        case .treasureVase: return makeSymbolTreasureVase()
+        case .lotus: return makeSymbolLotus()
+        case .victoryBanner: return makeSymbolVictoryBanner()
+        case .fish: return makeSymbolTwinFish()
+        case .endlessKnot: return makeSymbolEndlessKnot()
+        case .conch: return makeSymbolConch()
         }
     }
 
-    private static func makeSymbolParasol(gold: SimpleMaterial, silver: SimpleMaterial) -> Entity {
+    /// Flat ribbon streamers (XZ plane) hanging from a symbol.
+    private static func addAshtaRibbons(
+        to root: Entity,
+        origin: SIMD3<Float>,
+        length: Float,
+        colors: [AshtaColor]
+    ) {
+        guard !colors.isEmpty else { return }
+        let count = colors.count
+        for (i, color) in colors.enumerated() {
+            let t = Float(i) / Float(max(1, count - 1))
+            let xOff = (t - 0.5) * 0.028
+            let ribbon = ModelEntity(
+                mesh: .generateBox(
+                    size: SIMD3(0.0055, 0.0010, length * (0.85 + t * 0.2)),
+                    cornerRadius: 0.0015
+                ),
+                materials: [ashtaMat(color)]
+            )
+            ribbon.position = origin + SIMD3(xOff, 0.0002, length * 0.42)
+            ribbon.orientation = simd_quatf(angle: xOff * 8, axis: SIMD3(0, 1, 0))
+            root.addChild(ribbon)
+            // Curl tip.
+            let tip = ModelEntity(
+                mesh: .generateSphere(radius: 0.004),
+                materials: [ashtaMat(color)]
+            )
+            tip.scale = SIMD3(1.2, 0.35, 0.8)
+            tip.position = origin + SIMD3(xOff * 1.4, 0.0003, length * 0.85)
+            root.addChild(tip)
+        }
+    }
+
+    private static func makeSymbolParasol() -> Entity {
         let root = Entity()
+        // Stem along +Z (toward ribbons), canopy toward -Z — flat on cloth.
         let stem = ModelEntity(
-            mesh: .generateCylinder(height: 0.055, radius: 0.0032),
-            materials: [gold]
+            mesh: .generateCylinder(height: 0.048, radius: 0.003),
+            materials: [ashtaMat(.gold)]
         )
-        stem.position = SIMD3(0, 0.001, 0)
+        stem.orientation = simd_quatf(angle: .pi / 2, axis: SIMD3(1, 0, 0))
+        stem.position = SIMD3(0, 0.001, 0.004)
         root.addChild(stem)
-        let canopy = ModelEntity(
-            mesh: .generateSphere(radius: 0.028),
-            materials: [gold]
-        )
-        canopy.scale = SIMD3(1.15, 0.28, 1.15)
-        canopy.position = SIMD3(0, 0.001, -0.012)
-        root.addChild(canopy)
-        let finial = ModelEntity(mesh: .generateSphere(radius: 0.006), materials: [silver])
-        finial.position = SIMD3(0, 0.001, -0.028)
+
+        // Tiered canopy discs (blue / orange / green like the reference).
+        let tiers: [(Float, Float, AshtaColor)] = [
+            (0.030, -0.010, .blue),
+            (0.024, -0.016, .orange),
+            (0.018, -0.021, .green)
+        ]
+        for (radius, z, color) in tiers {
+            let disc = ModelEntity(
+                mesh: .generateCylinder(height: 0.0032, radius: radius),
+                materials: [ashtaMat(color)]
+            )
+            disc.position = SIMD3(0, 0.0012, z)
+            root.addChild(disc)
+            let fringe = ModelEntity(
+                mesh: .generateCylinder(height: 0.0020, radius: radius * 1.08),
+                materials: [ashtaMat(.pearl)]
+            )
+            fringe.position = SIMD3(0, 0.0009, z + 0.003)
+            root.addChild(fringe)
+        }
+        let finial = ModelEntity(mesh: .generateSphere(radius: 0.006), materials: [ashtaMat(.gold)])
+        finial.position = SIMD3(0, 0.0014, -0.028)
         root.addChild(finial)
-        // Flat on cloth (XZ plane): tip canopy toward -Z in local, then parent yaws.
-        root.orientation = simd_quatf(angle: .pi / 2, axis: SIMD3(1, 0, 0))
+        addAshtaRibbons(to: root, origin: SIMD3(0, 0.001, 0.018), length: 0.028, colors: [.green, .red, .yellow])
         return root
     }
 
-    private static func makeSymbolConch(gold: SimpleMaterial, silver: SimpleMaterial) -> Entity {
+    private static func makeSymbolConch() -> Entity {
         let root = Entity()
-        let body = ModelEntity(mesh: .generateSphere(radius: 0.018), materials: [silver])
-        body.scale = SIMD3(1.35, 0.55, 1.0)
-        body.position = SIMD3(0, 0.001, 0)
+        // Vertical white shell along Z with maroon wrap and ribbons.
+        let body = ModelEntity(mesh: .generateSphere(radius: 0.016), materials: [ashtaMat(.pearl)])
+        body.scale = SIMD3(0.85, 0.45, 1.55)
+        body.position = SIMD3(0, 0.0012, -0.002)
         root.addChild(body)
-        let spiral = ModelEntity(mesh: .generateSphere(radius: 0.010), materials: [gold])
-        spiral.scale = SIMD3(1.1, 0.45, 1.1)
-        spiral.position = SIMD3(0.012, 0.0012, 0.004)
-        root.addChild(spiral)
-        let mouth = ModelEntity(
-            mesh: .generateCone(height: 0.016, radius: 0.008),
-            materials: [gold]
+        let wrap = ModelEntity(mesh: .generateSphere(radius: 0.014), materials: [ashtaMat(.maroon)])
+        wrap.scale = SIMD3(1.05, 0.40, 0.75)
+        wrap.position = SIMD3(0, 0.0010, 0.004)
+        root.addChild(wrap)
+        let tip = ModelEntity(
+            mesh: .generateCone(height: 0.016, radius: 0.007),
+            materials: [ashtaMat(.gold)]
         )
-        mouth.orientation = simd_quatf(angle: .pi / 2, axis: SIMD3(0, 0, 1))
-        mouth.position = SIMD3(-0.018, 0.001, 0)
-        root.addChild(mouth)
+        tip.orientation = simd_quatf(angle: .pi, axis: SIMD3(1, 0, 0))
+        tip.position = SIMD3(0, 0.0012, -0.024)
+        root.addChild(tip)
+        let jewel = ModelEntity(mesh: .generateSphere(radius: 0.0045), materials: [ashtaMat(.red)])
+        jewel.position = SIMD3(0, 0.0014, -0.032)
+        root.addChild(jewel)
+        addAshtaRibbons(to: root, origin: SIMD3(0, 0.001, 0.014), length: 0.026, colors: [.yellow, .blue, .red])
         return root
     }
 
-    private static func makeSymbolTwinFish(gold: SimpleMaterial) -> Entity {
+    private static func makeSymbolTwinFish() -> Entity {
         let root = Entity()
-        for (i, side) in [-1, 1].enumerated() {
+        let base = ModelEntity(
+            mesh: .generateCylinder(height: 0.002, radius: 0.022),
+            materials: [ashtaMat(.blue)]
+        )
+        base.position = SIMD3(0, 0.0008, 0.018)
+        root.addChild(base)
+
+        for side in [-1, 1] {
             let fish = Entity()
-            let body = ModelEntity(mesh: .generateSphere(radius: 0.012), materials: [gold])
-            body.scale = SIMD3(1.8, 0.45, 0.85)
+            let body = ModelEntity(mesh: .generateSphere(radius: 0.011), materials: [ashtaMat(.gold)])
+            body.scale = SIMD3(0.85, 0.40, 1.9)
             fish.addChild(body)
             let tail = ModelEntity(
-                mesh: .generateCone(height: 0.014, radius: 0.007),
-                materials: [gold]
+                mesh: .generateCone(height: 0.012, radius: 0.007),
+                materials: [ashtaMat(.orange)]
             )
-            tail.orientation = simd_quatf(angle: .pi, axis: SIMD3(0, 0, 1))
-            tail.position = SIMD3(-0.018, 0, 0)
+            tail.orientation = simd_quatf(angle: .pi, axis: SIMD3(1, 0, 0))
+            tail.position = SIMD3(0, 0, 0.018)
             fish.addChild(tail)
-            fish.position = SIMD3(0, 0.001, Float(side) * 0.012)
-            fish.orientation = simd_quatf(
-                angle: Float(i == 0 ? 0.35 : -0.35 + .pi),
-                axis: SIMD3(0, 1, 0)
+            // Scale dots.
+            for (di, color) in [AshtaColor.red, .blue, .green].enumerated() {
+                let dot = ModelEntity(mesh: .generateSphere(radius: 0.0022), materials: [ashtaMat(color)])
+                dot.scale = SIMD3(1, 0.35, 1)
+                dot.position = SIMD3(Float(side) * 0.004, 0.001, -0.004 + Float(di) * 0.006)
+                fish.addChild(dot)
+            }
+            let crest = ModelEntity(
+                mesh: .generateBox(size: SIMD3(0.004, 0.001, 0.010), cornerRadius: 0.001),
+                materials: [ashtaMat(.green)]
             )
+            crest.position = SIMD3(Float(side) * 0.008, 0.001, -0.008)
+            fish.addChild(crest)
+            fish.position = SIMD3(Float(side) * 0.012, 0.0012, -0.004)
+            fish.orientation = simd_quatf(angle: Float(side) * 0.18, axis: SIMD3(0, 1, 0))
             root.addChild(fish)
         }
         return root
     }
 
-    private static func makeSymbolEndlessKnot(gold: SimpleMaterial) -> Entity {
+    private static func makeSymbolEndlessKnot() -> Entity {
         let root = Entity()
-        // Interlaced diamond lattice approximating the eternal knot.
-        let bars: [(SIMD3<Float>, Float)] = [
-            (SIMD3(0.036, 0.0012, 0.008), 0),
-            (SIMD3(0.036, 0.0012, 0.008), .pi / 2),
-            (SIMD3(0.028, 0.0012, 0.007), .pi / 4),
-            (SIMD3(0.028, 0.0012, 0.007), -.pi / 4),
-            (SIMD3(0.022, 0.0012, 0.006), .pi / 2.5),
-            (SIMD3(0.022, 0.0012, 0.006), -.pi / 2.5)
+        // Interlaced diamond in blue / orange / yellow like the reference.
+        let bands: [(SIMD3<Float>, Float, AshtaColor)] = [
+            (SIMD3(0.042, 0.0014, 0.008), 0, .blue),
+            (SIMD3(0.042, 0.0014, 0.008), .pi / 2, .orange),
+            (SIMD3(0.034, 0.0014, 0.007), .pi / 4, .blue),
+            (SIMD3(0.034, 0.0014, 0.007), -.pi / 4, .orange),
+            (SIMD3(0.026, 0.0015, 0.006), .pi / 2.6, .yellow),
+            (SIMD3(0.026, 0.0015, 0.006), -.pi / 2.6, .yellow)
         ]
-        for (size, yaw) in bars {
-            let bar = ModelEntity(mesh: .generateBox(size: size, cornerRadius: 0.0015), materials: [gold])
+        for (size, yaw, color) in bands {
+            let bar = ModelEntity(
+                mesh: .generateBox(size: size, cornerRadius: 0.0015),
+                materials: [ashtaMat(color)]
+            )
             bar.orientation = simd_quatf(angle: yaw, axis: SIMD3(0, 1, 0))
             bar.position = SIMD3(0, 0.001, 0)
             root.addChild(bar)
         }
-        for corner in [SIMD3<Float>(0.014, 0.0012, 0.014), SIMD3(0.014, 0.0012, -0.014),
-                       SIMD3(-0.014, 0.0012, 0.014), SIMD3(-0.014, 0.0012, -0.014)] {
-            let bead = ModelEntity(mesh: .generateSphere(radius: 0.0045), materials: [gold])
-            bead.scale = SIMD3(1, 0.4, 1)
+        for corner in [
+            SIMD3<Float>(0.016, 0.0014, 0.016), SIMD3(0.016, 0.0014, -0.016),
+            SIMD3(-0.016, 0.0014, 0.016), SIMD3(-0.016, 0.0014, -0.016)
+        ] {
+            let bead = ModelEntity(mesh: .generateSphere(radius: 0.005), materials: [ashtaMat(.yellow)])
+            bead.scale = SIMD3(1, 0.35, 1)
             bead.position = corner
             root.addChild(bead)
         }
         return root
     }
 
-    private static func makeSymbolTreasureVase(gold: SimpleMaterial, silver: SimpleMaterial) -> Entity {
+    private static func makeSymbolTreasureVase() -> Entity {
         let root = Entity()
-        let belly = ModelEntity(mesh: .generateSphere(radius: 0.016), materials: [gold])
-        belly.scale = SIMD3(1.05, 0.55, 1.05)
-        belly.position = SIMD3(0, 0.001, 0.002)
+        // Bulbous orange body with gold stripes, jeweled lid, side ribbons.
+        let belly = ModelEntity(mesh: .generateSphere(radius: 0.018), materials: [ashtaMat(.orange)])
+        belly.scale = SIMD3(1.05, 0.50, 1.15)
+        belly.position = SIMD3(0, 0.0012, 0.004)
         root.addChild(belly)
+        for i in 0..<6 {
+            let angle = Float(i) * (.pi / 3)
+            let stripe = ModelEntity(
+                mesh: .generateBox(size: SIMD3(0.003, 0.0012, 0.028), cornerRadius: 0.0008),
+                materials: [ashtaMat(.gold)]
+            )
+            stripe.position = SIMD3(cos(angle) * 0.014, 0.0014, 0.004)
+            stripe.orientation = simd_quatf(angle: -angle, axis: SIMD3(0, 1, 0))
+            root.addChild(stripe)
+        }
         let neck = ModelEntity(
-            mesh: .generateCylinder(height: 0.014, radius: 0.006),
-            materials: [gold]
+            mesh: .generateCylinder(height: 0.012, radius: 0.007),
+            materials: [ashtaMat(.yellow)]
         )
         neck.orientation = simd_quatf(angle: .pi / 2, axis: SIMD3(1, 0, 0))
-        neck.position = SIMD3(0, 0.001, -0.012)
+        neck.position = SIMD3(0, 0.0012, -0.014)
         root.addChild(neck)
-        let rim = ModelEntity(
-            mesh: .generateCylinder(height: 0.004, radius: 0.010),
-            materials: [silver]
+        let band = ModelEntity(
+            mesh: .generateCylinder(height: 0.004, radius: 0.012),
+            materials: [ashtaMat(.blue)]
         )
-        rim.orientation = simd_quatf(angle: .pi / 2, axis: SIMD3(1, 0, 0))
-        rim.position = SIMD3(0, 0.001, -0.020)
-        root.addChild(rim)
-        let jewel = ModelEntity(mesh: .generateSphere(radius: 0.005), materials: [silver])
-        jewel.position = SIMD3(0, 0.0012, -0.024)
+        band.orientation = simd_quatf(angle: .pi / 2, axis: SIMD3(1, 0, 0))
+        band.position = SIMD3(0, 0.0012, -0.010)
+        root.addChild(band)
+        let lid = ModelEntity(
+            mesh: .generateCone(height: 0.014, radius: 0.011),
+            materials: [ashtaMat(.green)]
+        )
+        lid.orientation = simd_quatf(angle: .pi, axis: SIMD3(1, 0, 0))
+        lid.position = SIMD3(0, 0.0012, -0.024)
+        root.addChild(lid)
+        let jewel = ModelEntity(mesh: .generateSphere(radius: 0.005), materials: [ashtaMat(.red)])
+        jewel.position = SIMD3(0, 0.0014, -0.032)
         root.addChild(jewel)
+        addAshtaRibbons(to: root, origin: SIMD3(0, 0.001, 0.018), length: 0.024, colors: [.green, .blue, .orange])
         return root
     }
 
-    private static func makeSymbolVictoryBanner(gold: SimpleMaterial, silver: SimpleMaterial) -> Entity {
+    private static func makeSymbolVictoryBanner() -> Entity {
         let root = Entity()
         let pole = ModelEntity(
             mesh: .generateCylinder(height: 0.055, radius: 0.003),
-            materials: [gold]
+            materials: [ashtaMat(.gold)]
         )
         pole.orientation = simd_quatf(angle: .pi / 2, axis: SIMD3(1, 0, 0))
         pole.position = SIMD3(0, 0.001, 0)
         root.addChild(pole)
-        for i in 0..<3 {
-            let t = Float(i) / 2.0
-            let cylinder = ModelEntity(
-                mesh: .generateCylinder(height: 0.010, radius: 0.014 - t * 0.003),
-                materials: [i % 2 == 0 ? gold : silver]
+        let tiers: [(Float, Float, AshtaColor)] = [
+            (0.016, -0.006, .blue),
+            (0.015, -0.015, .green),
+            (0.014, -0.024, .yellow),
+            (0.013, -0.033, .orange)
+        ]
+        for (radius, z, color) in tiers {
+            let band = ModelEntity(
+                mesh: .generateCylinder(height: 0.008, radius: radius),
+                materials: [ashtaMat(color)]
             )
-            cylinder.orientation = simd_quatf(angle: .pi / 2, axis: SIMD3(1, 0, 0))
-            cylinder.position = SIMD3(0, 0.001, -0.008 - Float(i) * 0.011)
-            root.addChild(cylinder)
+            band.orientation = simd_quatf(angle: .pi / 2, axis: SIMD3(1, 0, 0))
+            band.position = SIMD3(0, 0.0012, z)
+            root.addChild(band)
+            let trim = ModelEntity(
+                mesh: .generateCylinder(height: 0.002, radius: radius * 1.08),
+                materials: [ashtaMat(.red)]
+            )
+            trim.orientation = simd_quatf(angle: .pi / 2, axis: SIMD3(1, 0, 0))
+            trim.position = SIMD3(0, 0.0010, z + 0.004)
+            root.addChild(trim)
         }
-        let top = ModelEntity(mesh: .generateSphere(radius: 0.006), materials: [gold])
-        top.position = SIMD3(0, 0.001, -0.042)
+        let top = ModelEntity(mesh: .generateSphere(radius: 0.007), materials: [ashtaMat(.pearl)])
+        top.position = SIMD3(0, 0.0014, -0.042)
         root.addChild(top)
+        addAshtaRibbons(to: root, origin: SIMD3(0, 0.001, 0.020), length: 0.022, colors: [.pearl, .yellow, .pearl])
         return root
     }
 
-    private static func makeSymbolLotus(gold: SimpleMaterial, silver: SimpleMaterial) -> Entity {
+    private static func makeSymbolLotus() -> Entity {
         let root = Entity()
-        let petalCount = 8
-        for i in 0..<petalCount {
-            let angle = Float(i) * (.pi * 2 / Float(petalCount))
-            let petal = ModelEntity(mesh: .generateSphere(radius: 0.011), materials: [gold])
-            petal.scale = SIMD3(0.55, 0.28, 1.35)
-            petal.position = SIMD3(cos(angle) * 0.012, 0.001, sin(angle) * 0.012)
-            petal.orientation = simd_quatf(angle: -angle, axis: SIMD3(0, 1, 0))
-            root.addChild(petal)
+        // Orange/yellow petals with blue center and green leaves.
+        for ring in 0..<2 {
+            let count = ring == 0 ? 8 : 6
+            let radius: Float = ring == 0 ? 0.016 : 0.010
+            let petalColor: AshtaColor = ring == 0 ? .orange : .yellow
+            for i in 0..<count {
+                let angle = Float(i) * (.pi * 2 / Float(count)) + Float(ring) * 0.2
+                let petal = ModelEntity(mesh: .generateSphere(radius: 0.012), materials: [ashtaMat(petalColor)])
+                petal.scale = SIMD3(0.55, 0.28, 1.45)
+                petal.position = SIMD3(cos(angle) * radius, 0.001 + Float(ring) * 0.0003, sin(angle) * radius - 0.004)
+                petal.orientation = simd_quatf(angle: -angle, axis: SIMD3(0, 1, 0))
+                root.addChild(petal)
+            }
         }
-        let center = ModelEntity(mesh: .generateSphere(radius: 0.008), materials: [silver])
+        let center = ModelEntity(mesh: .generateSphere(radius: 0.008), materials: [ashtaMat(.blue)])
         center.scale = SIMD3(1, 0.35, 1)
-        center.position = SIMD3(0, 0.0012, 0)
+        center.position = SIMD3(0, 0.0014, -0.004)
         root.addChild(center)
+        // Stem + leaves toward +Z.
+        let stem = ModelEntity(
+            mesh: .generateCylinder(height: 0.022, radius: 0.0025),
+            materials: [ashtaMat(.green)]
+        )
+        stem.orientation = simd_quatf(angle: .pi / 2, axis: SIMD3(1, 0, 0))
+        stem.position = SIMD3(0, 0.001, 0.016)
+        root.addChild(stem)
+        for side in [-1, 1] {
+            let leaf = ModelEntity(mesh: .generateSphere(radius: 0.009), materials: [ashtaMat(.green)])
+            leaf.scale = SIMD3(1.4, 0.28, 0.7)
+            leaf.position = SIMD3(Float(side) * 0.014, 0.0011, 0.018)
+            root.addChild(leaf)
+        }
         return root
     }
 
-    private static func makeSymbolDharmaWheel(gold: SimpleMaterial, silver: SimpleMaterial) -> Entity {
+    private static func makeSymbolDharmaWheel() -> Entity {
         let root = Entity()
-        let hub = ModelEntity(mesh: .generateCylinder(height: 0.002, radius: 0.008), materials: [silver])
-        hub.position = SIMD3(0, 0.001, 0)
-        root.addChild(hub)
         let rim = ModelEntity(
-            mesh: .generateCylinder(height: 0.0018, radius: 0.026),
-            materials: [gold]
+            mesh: .generateCylinder(height: 0.0022, radius: 0.028),
+            materials: [ashtaMat(.gold)]
         )
         rim.position = SIMD3(0, 0.0009, 0)
         root.addChild(rim)
-        // Hollow the rim visually with a blue-ish inner disc (thin dark ring read).
-        var inner = SimpleMaterial()
-        inner.color = .init(tint: UIColor(red: 0.08, green: 0.18, blue: 0.55, alpha: 1))
-        let hole = ModelEntity(
-            mesh: .generateCylinder(height: 0.0022, radius: 0.020),
-            materials: [inner]
+        let inner = ModelEntity(
+            mesh: .generateCylinder(height: 0.0024, radius: 0.022),
+            materials: [ashtaMat(.blue)]
         )
-        hole.position = SIMD3(0, 0.0011, 0)
-        root.addChild(hole)
+        inner.position = SIMD3(0, 0.0011, 0)
+        root.addChild(inner)
+        let hubOuter = ModelEntity(
+            mesh: .generateCylinder(height: 0.0026, radius: 0.010),
+            materials: [ashtaMat(.green)]
+        )
+        hubOuter.position = SIMD3(0, 0.0012, 0)
+        root.addChild(hubOuter)
+        let hub = ModelEntity(
+            mesh: .generateCylinder(height: 0.0028, radius: 0.006),
+            materials: [ashtaMat(.yellow)]
+        )
+        hub.position = SIMD3(0, 0.0013, 0)
+        root.addChild(hub)
         for i in 0..<8 {
             let angle = Float(i) * (.pi / 4)
             let spoke = ModelEntity(
-                mesh: .generateBox(size: SIMD3(0.048, 0.0014, 0.0045), cornerRadius: 0.001),
-                materials: [gold]
+                mesh: .generateBox(size: SIMD3(0.048, 0.0015, 0.0048), cornerRadius: 0.001),
+                materials: [ashtaMat(.blue)]
             )
             spoke.orientation = simd_quatf(angle: angle, axis: SIMD3(0, 1, 0))
-            spoke.position = SIMD3(0, 0.0013, 0)
+            spoke.position = SIMD3(0, 0.0014, 0)
             root.addChild(spoke)
+            // Rim jewels at spoke tips.
+            let jewel = ModelEntity(
+                mesh: .generateSphere(radius: 0.0035),
+                materials: [ashtaMat(i % 2 == 0 ? .red : .yellow)]
+            )
+            jewel.scale = SIMD3(1, 0.4, 1)
+            jewel.position = SIMD3(cos(angle) * 0.026, 0.0015, sin(angle) * 0.026)
+            root.addChild(jewel)
         }
+        addAshtaRibbons(to: root, origin: SIMD3(0, 0.001, 0.024), length: 0.024, colors: [.green, .yellow, .red])
         return root
     }
 
@@ -340,18 +502,20 @@ enum MandalaBuilder {
         size: Float,
         y: Float,
         gold: SimpleMaterial,
-        silver: SimpleMaterial
+        silver: SimpleMaterial,
+        keepout: Float? = nil
     ) {
-        let keepout = size * 0.27
-        let step = size / 9.5
+        let keep = keepout ?? size * 0.27
+        let step = size / 14.0
         let extent = size * 0.48
+        let grid = Int((extent / step).rounded(.up))
         var idx = 0
-        for iz in -5...5 {
-            for ix in -5...5 {
+        for iz in -grid...grid {
+            for ix in -grid...grid {
                 let x = Float(ix) * step + (iz % 2 == 0 ? step * 0.35 : 0)
                 let z = Float(iz) * step
                 if abs(x) > extent || abs(z) > extent { continue }
-                if abs(x) < keepout && abs(z) < keepout { continue }
+                if abs(x) < keep && abs(z) < keep { continue }
                 let swirl = makeCoverCloudScroll(
                     material: idx % 3 == 0 ? silver : gold,
                     compact: idx % 2 == 0
@@ -361,7 +525,7 @@ enum MandalaBuilder {
                     angle: Float(idx % 4) * (.pi / 2) + 0.2,
                     axis: SIMD3(0, 1, 0)
                 )
-                swirl.scale = SIMD3(repeating: idx % 5 == 0 ? 0.85 : 0.65)
+                swirl.scale = SIMD3(repeating: idx % 5 == 0 ? 0.95 : 0.72)
                 parent.addChild(swirl)
                 idx += 1
             }
@@ -1549,7 +1713,13 @@ enum MandalaBuilder {
         UIColor(red: 0.35, green: 0.62, blue: 0.88, alpha: 1)  // sky lapis
     ]
 
-    /// Fuller sector mounds: more fine grains baked into a few meshes.
+    /// Only these offering numbers get animated Mandelbrot shells; others stay classic mounds.
+    private static let fractalHeapNumbers: Set<Int> = [3, 19, 28]
+
+    static func usesFractalShell(heapNumber: Int) -> Bool {
+        fractalHeapNumbers.contains(heapNumber)
+    }
+
     private static let riceParticleTarget = 140
     private static let riceParticleJitter = 12 // → 128…152
     private static let crystalParticleTarget = 130
@@ -1814,6 +1984,11 @@ enum MandalaBuilder {
             )
         }
 
+        // Mandelbrot only on a few standout heaps; the rest keep classic rice/gem mounds.
+        if fractalHeapNumbers.contains(heapNumber) {
+            addFractalShell(to: root, scale: scale, heapNumber: heapNumber)
+        }
+
         // Single trigger collider covering the larger bulge (paired for targeted gestures).
         let hitRadius = 0.16 * scale
         let hitHeight: Float = 0.15 * scale
@@ -1823,7 +1998,9 @@ enum MandalaBuilder {
         root.components.set(InputTargetComponent())
 
         // One shadow caster for the whole pile — never on individual grains.
-        if let bulk = root.children.first(where: { $0.name.hasPrefix("MoundBulk") }) as? ModelEntity {
+        if let shell = root.findEntity(named: "FractalShell") as? ModelEntity {
+            shell.components.set(GroundingShadowComponent(castsShadow: true))
+        } else if let bulk = root.children.first(where: { $0.name.hasPrefix("MoundBulk") }) as? ModelEntity {
             bulk.components.set(GroundingShadowComponent(castsShadow: true))
         }
 
@@ -1978,6 +2155,27 @@ enum MandalaBuilder {
         bulk.scale = SIMD3(radius, height * 0.55, radius)
         bulk.position = SIMD3(0, height * 0.42, 0)
         root.addChild(bulk)
+    }
+
+    /// Squashed dome carrying the animated Mandelbrot zoom texture (select heaps only).
+    private static func addFractalShell(to root: Entity, scale: Float, heapNumber: Int) {
+        let radius = 0.125 * scale
+        let height = 0.110 * scale
+        let hue = CGFloat((heapNumber % 12)) / 12
+        var mat = UnlitMaterial(
+            color: UIColor(hue: hue, saturation: 0.75, brightness: 0.55, alpha: 1)
+        )
+        let shell = ModelEntity(mesh: particleMesh, materials: [mat])
+        shell.name = "FractalShell"
+        shell.scale = SIMD3(radius * 1.08, height * 0.62, radius * 1.08)
+        shell.position = SIMD3(0, height * 0.45, 0)
+        shell.components.set(GroundingShadowComponent(castsShadow: true))
+        root.addChild(shell)
+
+        // Hide solid bulk under the fractal shell so the Mandelbrot reads clearly.
+        for child in root.children where child.name.hasPrefix("MoundBulk") {
+            child.isEnabled = false
+        }
     }
 
     /// Uniform sample in the upper unit hemispheroid (x²+z²+y² ≤ 1, y ≥ 0).
@@ -2215,22 +2413,98 @@ enum MandalaBuilder {
             UIColor(red: 0.95, green: 0.95, blue: 0.9, alpha: 0.9)
         ]
 
+        // Compact halo that sits on the finial tip (origin ≈ contact point).
         for i in 0..<12 {
             let angle = Float(i) * (.pi * 2 / 12)
             let sphere = ModelEntity(
-                mesh: .generateSphere(radius: 0.018),
+                mesh: .generateSphere(radius: 0.014),
                 materials: [UnlitMaterial(color: colors[i % colors.count])]
             )
-            sphere.position = SIMD3(cos(angle) * 0.08, 0.05, sin(angle) * 0.08)
+            sphere.position = SIMD3(cos(angle) * 0.055, 0.045, sin(angle) * 0.055)
             root.addChild(sphere)
         }
 
         let core = ModelEntity(
-            mesh: .generateSphere(radius: 0.06),
+            mesh: .generateSphere(radius: 0.048),
             materials: [UnlitMaterial(color: UIColor(red: 1, green: 0.95, blue: 0.7, alpha: 0.55))]
         )
-        core.position = SIMD3(0, 0.08, 0)
+        core.position = SIMD3(0, 0.048, 0)
         root.addChild(core)
+
+        return root
+    }
+
+    /// Soft glow + rainbow sparklets attached to a heap; driven by bounce idle motion.
+    static func makeHeapBounceAura(seed: Int) -> Entity {
+        let root = Entity()
+        root.name = "HeapBounceAura"
+
+        let rainbow: [UIColor] = [
+            UIColor(red: 1.00, green: 0.25, blue: 0.35, alpha: 0.95), // red
+            UIColor(red: 1.00, green: 0.55, blue: 0.12, alpha: 0.95), // orange
+            UIColor(red: 1.00, green: 0.88, blue: 0.15, alpha: 0.95), // yellow
+            UIColor(red: 0.25, green: 0.95, blue: 0.40, alpha: 0.95), // green
+            UIColor(red: 0.20, green: 0.75, blue: 1.00, alpha: 0.95), // cyan
+            UIColor(red: 0.45, green: 0.35, blue: 1.00, alpha: 0.95), // indigo
+            UIColor(red: 0.85, green: 0.30, blue: 0.95, alpha: 0.95)  // violet
+        ]
+
+        // Soft ground glow disc.
+        let glow = ModelEntity(
+            mesh: .generateSphere(radius: 0.055),
+            materials: [UnlitMaterial(color: UIColor(white: 1, alpha: 0.22))]
+        )
+        glow.name = "BounceGlow"
+        glow.scale = SIMD3(1.4, 0.18, 1.4)
+        glow.position = SIMD3(0, 0.008, 0)
+        root.addChild(glow)
+
+        // Rising rainbow sparklets (hidden until bounce pulse).
+        let sparks = Entity()
+        sparks.name = "BounceSparks"
+        for i in 0..<10 {
+            let color = rainbow[(i + seed) % rainbow.count]
+            let spark = ModelEntity(
+                mesh: .generateSphere(radius: 0.006 + Float(i % 3) * 0.0015),
+                materials: [UnlitMaterial(color: color)]
+            )
+            spark.name = "Spark_\(i)"
+            let angle = Float(i) * (.pi * 2 / 10) + Float(seed) * 0.17
+            spark.position = SIMD3(cos(angle) * 0.02, 0.02, sin(angle) * 0.02)
+            spark.scale = .zero
+            sparks.addChild(spark)
+        }
+        root.addChild(sparks)
+
+        // Arc ribbons — thin unlit bars that fan out on bounce.
+        let arcs = Entity()
+        arcs.name = "BounceArcs"
+        for i in 0..<6 {
+            let color = rainbow[(i * 2 + seed) % rainbow.count]
+            let arc = ModelEntity(
+                mesh: .generateBox(size: SIMD3(0.004, 0.004, 0.055), cornerRadius: 0.0015),
+                materials: [UnlitMaterial(color: color.withAlphaComponent(0.85))]
+            )
+            arc.name = "Arc_\(i)"
+            let angle = Float(i) * (.pi / 3) + 0.2
+            arc.orientation = simd_quatf(angle: angle, axis: SIMD3(0, 1, 0))
+                * simd_quatf(angle: -0.55, axis: SIMD3(1, 0, 0))
+            arc.position = SIMD3(cos(angle) * 0.025, 0.03, sin(angle) * 0.025)
+            arc.scale = .zero
+            arcs.addChild(arc)
+        }
+        root.addChild(arcs)
+
+        // Point light — intensity animated on bounce.
+        let lightAnchor = Entity()
+        lightAnchor.name = "BounceLight"
+        lightAnchor.position = SIMD3(0, 0.06, 0)
+        var light = PointLightComponent()
+        light.color = UIColor(red: 1.0, green: 0.85, blue: 0.55, alpha: 1)
+        light.intensity = 40
+        light.attenuationRadius = 0.35
+        lightAnchor.components.set(light)
+        root.addChild(lightAnchor)
 
         return root
     }

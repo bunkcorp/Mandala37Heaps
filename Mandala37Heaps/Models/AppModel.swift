@@ -76,6 +76,19 @@ final class AppModel {
     private var adaptivityVisualizers: [MandalaTier: AdaptivityVisualizer] = [:]
     private let neuralResidual = PhysicsConstrainedResidualCorrector()
     private var neuralVisualizers: [MandalaTier: ResidualSurfaceVisualizer] = [:]
+    /// Continuous slow spin angle (radians) for each metal ring.
+    private var ringSpinAngles: [MandalaTier: Float] = [:]
+    /// ~one revolution per 55s; sign alternates CW / CCW per tier.
+    private let ringSpinSpeed: Float = (.pi * 2) / 55
+    /// Shared clock for subtle heap idle motion.
+    private var heapIdleTime: Float = 0
+    /// Previous bob height per heap — used to detect bounce landings.
+    private var heapPrevBob: [Float] = Array(repeating: 0, count: 37)
+    /// Cooldown so each heap doesn’t spark every frame.
+    private var heapBounceCooldown: [Float] = Array(repeating: 0, count: 37)
+    /// Active bounce pulse strength 0…1 per heap.
+    private var heapBouncePulse: [Float] = Array(repeating: 0, count: 37)
+    private let heapFractals = HeapFractalAnimator()
     let ritualTool = RitualToolTracker()
 
     var nextGuidedIndex: Int? {
@@ -219,8 +232,144 @@ final class AppModel {
                         }
                     }
                 }
+                updateRingSpins(dt: step)
+                updateHeapIdles(dt: step)
+                heapFractals.tick(dt: step)
                 refreshDiagnosticsHUD()
                 try? await Task.sleep(for: .milliseconds(16))
+            }
+        }
+    }
+
+    /// Slow continuous Y-spin on each unlocked metal ring; adjacent tiers reverse direction.
+    private func updateRingSpins(dt: Float) {
+        let clamped = min(max(dt, 0), 0.05)
+        for tier in MandalaTier.allCases {
+            guard tier.rawValue <= unlockedTier.rawValue,
+                  let root = tierRoots[tier],
+                  root.isEnabled,
+                  let ring = root.findEntity(named: "MetalRing") else { continue }
+            // Even tiers: clockwise (−Y); odd tiers: counterclockwise (+Y).
+            let direction: Float = tier.rawValue % 2 == 0 ? -1 : 1
+            let next = (ringSpinAngles[tier] ?? 0) + direction * ringSpinSpeed * clamped
+            // Keep angle bounded for numerical comfort.
+            var wrapped = next.truncatingRemainder(dividingBy: .pi * 2)
+            if wrapped < 0 { wrapped += .pi * 2 }
+            ringSpinAngles[tier] = wrapped
+            ring.orientation = simd_quatf(angle: wrapped, axis: SIMD3(0, 1, 0))
+        }
+    }
+
+    /// Soft bob / sway / breathe on placed heaps, with rainbow glow + shake/spin on land.
+    private func updateHeapIdles(dt: Float) {
+        let clamped = min(max(dt, 0), 0.05)
+        heapIdleTime += clamped
+        let baseY: Float = 0.005
+        for (index, optionalHeap) in heapEntities.enumerated() {
+            guard let heap = optionalHeap, heap.parent != nil else { continue }
+            // Skip while the place-grow animation is still scaling up.
+            let scaleY = heap.scale.y
+            guard scaleY > 0.85 else { continue }
+
+            let phase = Float(index) * 0.73
+            let t = heapIdleTime
+            let bob = sin(t * 1.35 + phase) * 0.0018
+            let sway = sin(t * 0.95 + phase * 1.3) * 0.035
+            let tip = cos(t * 1.1 + phase * 0.8) * 0.018
+            let breathe = 1 + sin(t * 1.6 + phase * 1.1) * 0.012
+
+            // Detect bounce landing: rising through the trough of the bob.
+            let prev = heapPrevBob[index]
+            heapPrevBob[index] = bob
+            heapBounceCooldown[index] = max(0, heapBounceCooldown[index] - clamped)
+            if bob < -0.0010, bob > prev, heapBounceCooldown[index] <= 0 {
+                heapBouncePulse[index] = 1
+                heapBounceCooldown[index] = 0.55
+            }
+
+            // Decay pulse and drive aura visuals.
+            if heapBouncePulse[index] > 0 {
+                heapBouncePulse[index] = max(0, heapBouncePulse[index] - clamped * 1.6)
+            }
+            let p = heapBouncePulse[index]
+
+            // Land shake: high-frequency jitter that dies with the pulse.
+            let shakeAmp = p * p
+            let shakeX = sin(t * 48 + phase * 9) * 0.0045 * shakeAmp
+            let shakeZ = cos(t * 41 + phase * 7) * 0.0045 * shakeAmp
+            let shakeY = abs(sin(t * 55 + phase)) * 0.0022 * shakeAmp
+
+            // Land tumble / spin: fast yaw + roll/pitch wobble on impact.
+            let spinYaw = sway + sin(t * 22 + phase) * 0.55 * shakeAmp
+                + cos(t * 9 + phase * 2) * 0.28 * p
+            let spinPitch = tip + sin(t * 31 + phase * 1.4) * 0.32 * shakeAmp
+            let spinRoll = cos(t * 27 + phase * 0.7) * 0.38 * shakeAmp
+
+            heap.position = SIMD3(shakeX, baseY + bob + shakeY, shakeZ)
+            heap.orientation =
+                simd_quatf(angle: spinYaw, axis: SIMD3(0, 1, 0)) *
+                simd_quatf(angle: spinPitch, axis: SIMD3(1, 0, 0)) *
+                simd_quatf(angle: spinRoll, axis: SIMD3(0, 0, 1))
+            // Squash slightly on land, then spring back with breathe.
+            let squash = 1 - 0.08 * shakeAmp
+            let stretch = 1 + 0.10 * shakeAmp
+            heap.scale = SIMD3(breathe * stretch, breathe * squash, breathe * stretch)
+
+            updateHeapBounceAura(on: heap, index: index, pulse: p, time: t)
+        }
+    }
+
+    private func updateHeapBounceAura(on heap: Entity, index: Int, pulse: Float, time: Float) {
+        guard let aura = heap.findEntity(named: "HeapBounceAura") else { return }
+        let p = max(0, min(1, pulse))
+        let idleShimmer = 0.15 + 0.08 * sin(time * 2.4 + Float(index))
+
+        if let glow = aura.findEntity(named: "BounceGlow") {
+            let g = 0.55 + p * 1.8 + idleShimmer
+            glow.scale = SIMD3(1.2 + p * 0.9, 0.16 + p * 0.2, 1.2 + p * 0.9)
+            // Brightness via uniform scale + slight lift.
+            glow.position = SIMD3(0, 0.008 + p * 0.01, 0)
+            if let model = glow as? ModelEntity {
+                let alpha = CGFloat(0.12 + p * 0.55 + idleShimmer * 0.2)
+                let hue = CGFloat((time * 0.35 + Float(index) * 0.11).truncatingRemainder(dividingBy: 1))
+                model.model?.materials = [
+                    UnlitMaterial(color: UIColor(hue: hue, saturation: 0.75, brightness: 1, alpha: alpha))
+                ]
+            }
+        }
+
+        if let lightAnchor = aura.findEntity(named: "BounceLight"),
+           var light = lightAnchor.components[PointLightComponent.self] {
+            let hue = CGFloat((time * 0.4 + Float(index) * 0.13).truncatingRemainder(dividingBy: 1))
+            light.color = UIColor(hue: hue, saturation: 0.65, brightness: 1, alpha: 1)
+            light.intensity = 60 + p * 1400
+            light.attenuationRadius = 0.28 + p * 0.45
+            lightAnchor.components.set(light)
+            lightAnchor.position = SIMD3(0, 0.05 + p * 0.08, 0)
+        }
+
+        if let sparks = aura.findEntity(named: "BounceSparks") {
+            let children = Array(sparks.children)
+            for (i, spark) in children.enumerated() {
+                let angle = Float(i) * (.pi * 2 / Float(max(1, children.count))) + time * 0.8
+                let rise = p * (0.04 + Float(i % 4) * 0.018)
+                let radial = 0.015 + p * (0.04 + Float(i % 3) * 0.012)
+                spark.position = SIMD3(cos(angle) * radial, 0.015 + rise, sin(angle) * radial)
+                let s = p * (0.7 + Float(i % 3) * 0.25)
+                spark.scale = SIMD3(repeating: s)
+            }
+        }
+
+        if let arcs = aura.findEntity(named: "BounceArcs") {
+            let children = Array(arcs.children)
+            for (i, arc) in children.enumerated() {
+                let angle = Float(i) * (.pi / 3) + time * 0.5
+                let lift = p * (0.04 + Float(i % 2) * 0.02)
+                arc.position = SIMD3(cos(angle) * (0.02 + p * 0.05), 0.02 + lift, sin(angle) * (0.02 + p * 0.05))
+                arc.orientation = simd_quatf(angle: angle, axis: SIMD3(0, 1, 0))
+                    * simd_quatf(angle: -0.35 - p * 0.55, axis: SIMD3(1, 0, 0))
+                let s = p * (0.6 + Float(i % 3) * 0.2)
+                arc.scale = SIMD3(s, s, 0.5 + p * 1.4)
             }
         }
     }
@@ -652,6 +801,9 @@ final class AppModel {
             viz.setEnabled(false)
         }
         for i in 0..<37 {
+            if filled[i] {
+                heapFractals.detach(heapNumber: i + 1)
+            }
             heapEntities[i]?.removeFromParent()
             heapEntities[i] = nil
             filled[i] = false
@@ -732,10 +884,18 @@ final class AppModel {
             )
         }
         heap.position = SIMD3(0, 0.005, 0)
+        let aura = MandalaBuilder.makeHeapBounceAura(seed: definition.number)
+        heap.addChild(aura)
         slotEntities[index].addChild(heap)
         heapEntities[index] = heap
         filled[index] = true
         filledCount = filled.filter { $0 }.count
+        heapPrevBob[index] = 0
+        heapBounceCooldown[index] = 0
+        heapBouncePulse[index] = 0.85 // placement pop
+        if MandalaBuilder.usesFractalShell(heapNumber: definition.number) {
+            heapFractals.attach(to: heap, heapNumber: definition.number)
+        }
 
         heap.scale = SIMD3(repeating: 0.2)
         let grown = Transform(scale: .one, rotation: heap.orientation, translation: heap.position)
@@ -950,15 +1110,15 @@ final class AppModel {
         crown.move(to: grown, relativeTo: host, duration: 0.55, timingFunction: .easeOut)
 
         let burst = MandalaBuilder.makeCelebrationBurst()
-        // Burst above the finial tip (pedestal + flame ~0.20 × scale 0.72).
-        burst.position = SIMD3(0, seatY + 0.28, 0)
-        burst.scale = SIMD3(repeating: 0.28)
-        host.addChild(burst)
+        // Sit on the finial tip (pedestal top 0.036 + flame tip ≈ 0.187) — no floating gap.
+        burst.position = SIMD3(0, 0.036 + 0.175, 0)
+        burst.scale = SIMD3(repeating: 0.55)
+        crown.addChild(burst)
         celebrationEntity = burst
 
         var expanded = burst.transform
-        expanded.scale = SIMD3(repeating: 1.15)
-        burst.move(to: expanded, relativeTo: host, duration: 1.2, timingFunction: .easeOut)
+        expanded.scale = SIMD3(repeating: 1.05)
+        burst.move(to: expanded, relativeTo: crown, duration: 1.2, timingFunction: .easeOut)
 
         pulseTask?.cancel()
         pulseTask = Task { @MainActor in
@@ -966,14 +1126,14 @@ final class AppModel {
             guard !Task.isCancelled else { return }
             statusMessage = "Mandala Complete — centerpiece placed"
             for _ in 0..<3 {
-                guard !Task.isCancelled else { return }
+                guard !Task.isCancelled, burst.parent != nil else { return }
                 var bright = burst.transform
-                bright.scale = SIMD3(repeating: 1.35)
-                burst.move(to: bright, relativeTo: host, duration: 0.45, timingFunction: .easeInOut)
+                bright.scale = SIMD3(repeating: 1.18)
+                burst.move(to: bright, relativeTo: crown, duration: 0.45, timingFunction: .easeInOut)
                 try? await Task.sleep(for: .milliseconds(450))
                 var dim = burst.transform
-                dim.scale = SIMD3(repeating: 0.95)
-                burst.move(to: dim, relativeTo: host, duration: 0.45, timingFunction: .easeInOut)
+                dim.scale = SIMD3(repeating: 0.92)
+                burst.move(to: dim, relativeTo: crown, duration: 0.45, timingFunction: .easeInOut)
                 try? await Task.sleep(for: .milliseconds(450))
             }
         }
@@ -1001,6 +1161,12 @@ final class AppModel {
         neuralResidual.reset()
         tierRoots.removeAll()
         tierSlotsParents.removeAll()
+        ringSpinAngles.removeAll()
+        heapIdleTime = 0
+        heapPrevBob = Array(repeating: 0, count: 37)
+        heapBounceCooldown = Array(repeating: 0, count: 37)
+        heapBouncePulse = Array(repeating: 0, count: 37)
+        heapFractals.reset()
         crownEntity = nil
         celebrationEntity = nil
 
